@@ -201,11 +201,21 @@ class Transmitter {
         if (stats.size > MAX_FILE_BYTES) throw new Error(`file too large (${stats.size} > ${MAX_FILE_BYTES}): ${path}`)
         const buffer = Buffer.allocUnsafe(stats.size)
         const fd = openSync(path, 'r')
+        let offset = 0
         try {
-          let offset = 0
-          while (offset < stats.size) offset += readSync(fd, buffer, offset, stats.size - offset, null)
+          while (offset < stats.size) {
+            const read = readSync(fd, buffer, offset, stats.size - offset, null)
+            // File shrank between stat and read (TOCTOU): a zero read never
+            // advances — break instead of wedging the event loop forever.
+            if (read === 0) break
+            offset += read
+          }
         } finally { closeSync(fd) }
-        return { content: buffer.toString('utf8'), version: versionOf(stats) }
+        if (buffer.includes(0, 0, offset)) {
+          // Binary payload: base64 (the pull side decodes; pushes already refuse).
+          return { binary: true, content: buffer.subarray(0, offset).toString('base64'), version: versionOf(stats) }
+        }
+        return { content: buffer.subarray(0, offset).toString('utf8'), version: versionOf(stats) }
       }
       case 'write': {
         const path = normalizeRemotePath(args.path)
@@ -311,9 +321,11 @@ class Transmitter {
 }
 
 /** Run one command on this device (exec channel). Streams output via onChunk. */
-function runExec({ command, cwd }, onChunk) {
+function runExec({ command, cwd }, onChunk, onOrphan) {
   return new Promise((resolvePromise) => {
     const child = spawn('bash', ['-lc', String(command ?? '')], { cwd: normalizeRemotePath(cwd || homedir()) })
+    try { child.stdin.end() } catch { /* already gone */ }
+    onOrphan?.(child)
     let settled = false
     const settle = (exitCode, error) => {
       if (settled) return
@@ -483,9 +495,11 @@ class SyncEngine {
   // ── Routing ────────────────────────────────────────────────────────────────
   /** Route one message to a peer: hub socket first, else my outbound link. */
   async route(peerId, message) {
+    const token = this.store.peer(peerId)?.token
+    const payload = { ...message, from: this.myId, to: peerId, ...(token !== undefined ? { token } : {}) }
     const hubWire = this.hubSockets.get(peerId)
-    if (hubWire !== undefined && !hubWire.closed) { hubWire.send({ ...message, from: this.myId, to: peerId }); return }
-    if (this.outbound !== null && !this.outbound.closed) { this.outbound.send({ ...message, from: this.myId, to: peerId }); return }
+    if (hubWire !== undefined && !hubWire.closed) { hubWire.send(payload); return }
+    if (this.outbound !== null && !this.outbound.closed) { this.outbound.send(payload); return }
     throw new Error(`device ${peerId} is not connected (set a hub URL or wait for it to dial in)`)
   }
 
@@ -513,17 +527,39 @@ class SyncEngine {
     switch (message.op) {
       case 'hello-hub': {
         // A device identifies its socket so the hub can route to it.
-        wire.peerId = String(message.from ?? '')
-        this.hubSockets.set(wire.peerId, wire)
+        const claim = String(message.from ?? '')
+        if (claim === '') throw new Error('hello-hub requires from')
+        // Identity takeover guard: a live registration for this id exists →
+        // refuse (closing the imposter), never silently re-route a victim.
+        const existing = this.hubSockets.get(claim)
+        if (existing !== undefined && existing !== wire && !existing.closed) {
+          throw new Error(`device ${claim} is already connected to this hub`)
+        }
+        wire.peerId = claim
+        this.hubSockets.set(claim, wire)
         this.onPeerStateChange?.()
         return { ok: true, hubDeviceId: this.myId, name: this.store.identity.name }
       }
       case 'pair': {
         // Pairing knock: validate my current code, mint a long-lived token.
-        // Brute-force limit: five misses on one socket closes it.
+        // Brute-force limits: per-socket AND per-claimed-id global lockout
+        // (reconnecting must not reset the guess budget).
+        const claimant = String(message.from ?? 'anon')
+        this.pairLocks ??= new Map()
+        const lock = this.pairLocks.get(claimant) ?? { misses: 0, until: 0 }
+        if (Date.now() < lock.until) throw new Error('pairing locked for this device, try later')
         wire.pairMisses = (wire.pairMisses ?? 0) + 1
-        if (wire.pairMisses > 5) { wire.socket.close(); throw new Error('too many pairing attempts') }
-        if (String(message.code ?? '') !== this.store.identity.pairingCode) throw new Error('wrong pairing code')
+        if (wire.pairMisses > 5 || lock.misses >= 5) {
+          lock.until = Date.now() + 10 * 60_000
+          this.pairLocks.set(claimant, lock)
+          wire.socket.close()
+          throw new Error('too many pairing attempts')
+        }
+        if (String(message.code ?? '') !== this.store.identity.pairingCode) {
+          lock.misses += 1
+          this.pairLocks.set(claimant, lock)
+          throw new Error('wrong pairing code')
+        }
         const token = randomBytes(24).toString('hex')
         this.store.upsertPeer({ deviceId: String(message.from ?? 'unknown'), name: String(message.name ?? 'device'), token, hubUrl: '', lastSeen: Date.now() })
         this.onPeerStateChange?.()
@@ -531,8 +567,11 @@ class SyncEngine {
       }
       case 'exec': {
         const execId = String(message.execId ?? randomUUID())
+        // Kill the child if the requester's socket dies mid-exec (orphans).
         const result = await runExec(message, (stream, chunk) => {
           this.route(peerId, { type: 'exec-out', stream, chunk, execId }).catch(() => {})
+        }, (child) => {
+          wire.socket.once('close', () => { try { child.kill('SIGKILL') } catch { /* already exited */ } })
         })
         return { ...result, execId }
       }
@@ -547,20 +586,39 @@ class SyncEngine {
     if (to === undefined || to === this.myId) return this.#serveLocal(message, wire)
     const target = this.hubSockets.get(to)
     if (target === undefined || target.closed) throw new Error(`device ${to} is not connected to this hub`)
-    if (message.op !== undefined) return target.request(message.op, message, message.op === 'exec' ? 11 * 60_000 : 120_000)
+    if (message.op !== undefined) {
+      // NEVER forward the caller's id: target.request mints its own and the
+      // result resolves back up this chain — forwarding would clobber the
+      // target's pending-entry id and drop or cross-deliver responses.
+      const { id: _callerId, ...rest } = message
+      return target.request(message.op, rest, message.op === 'exec' ? 11 * 60_000 : 120_000)
+    }
     target.send(message)
     return { ok: true }
   }
 
   #inboundPush = async (message, wire) => {
-    if (message.type === 'close-peer' && (message.to === undefined || message.to === this.myId)) {
-      wire.onClose?.(wire)
+    const addressedToMe = message.to === undefined || message.to === this.myId
+    if (!addressedToMe) {
+      const target = this.hubSockets.get(message.to)
+      if (target !== undefined && !target.closed) target.send(message)
       return
     }
-    const to = message.to
-    if (to !== undefined && to !== this.myId) {
-      const target = this.hubSockets.get(to)
-      if (target !== undefined && !target.closed) target.send(message)
+    // Everything addressed to me must authenticate: pushes carry the same
+    // per-peer token as requests (the relay is not trusted to originate).
+    const peerId = String(message.from ?? wire.peerId ?? '')
+    const peer = this.store.peer(peerId)
+    if (peer === undefined || message.token !== peer.token) {
+      if (message.type !== 'hello') console.warn(`[dsh-rich-sync] unauthenticated push (${message.type}) from ${peerId} dropped`)
+      return
+    }
+    if (message.type === 'close-peer') {
+      // The peer unlinked us: drop them, stop serving, close their socket.
+      this.store.dropPeer(peerId)
+      const theirWire = this.hubSockets.get(peerId)
+      theirWire?.socket.close()
+      if (this.outbound !== null) this.outbound.socket.close()
+      this.onPeerStateChange?.()
       return
     }
     if (message.type === 'exec-out') {
@@ -568,7 +626,7 @@ class SyncEngine {
       if (parts !== undefined && parts.length < 4096) parts.push(String(message.chunk ?? ''))
       return
     }
-    if (message.type === 'events') { void this.#applyRemoteEvents(message.from ?? wire.peerId, message.changes) }
+    if (message.type === 'events') { void this.#applyRemoteEvents(peerId, message.changes) }
   }
 
   // ── Hub endpoint (this device may be the public meeting point) ────────────
@@ -658,18 +716,26 @@ class SyncEngine {
     mkdirSync(sync.localPath, { recursive: true })
     try {
       await this.peerRequest(sync.deviceId, 'watch', { root: sync.remotePath }, 30_000)
+      // Watch FIRST: even a capped/partial initial sync keeps streaming
+      // remote changes instead of silently freezing.
+      this.#watchLocal(sync)
       await this.#syncDir(sync, sync.remotePath, sync.localPath)
       sync.syncedAt = Date.now()
       this.store.saveSyncs()
-      this.#watchLocal(sync)
     } finally {
       this.mirrorRunning.delete(key)
     }
   }
 
   async #syncDir(sync, remoteDir, localDir, depth = 0) {
-    if (depth > 12) throw new Error(`mirror depth cap (12) exceeded under ${sync.remotePath}`)
-    if ((this.#syncedFiles ?? 0) > 50_000) throw new Error(`mirror file cap (50000) exceeded under ${sync.remotePath}`)
+    if (depth > 12) {
+      console.warn(`[dsh-rich-sync] depth cap (12) hit under ${remoteDir} — subtree skipped, mirror continues`)
+      return
+    }
+    if (this.#syncedFiles > 50_000) {
+      console.warn(`[dsh-rich-sync] file cap (50000) hit under ${remoteDir} — stopping initial sync, mirror stays partial`)
+      return
+    }
     const entries = await this.peerRequest(sync.deviceId, 'list', { path: remoteDir }, 60_000)
     for (const entry of entries ?? []) {
       const remoteChild = `${remoteDir}/${entry.name}`
@@ -678,6 +744,7 @@ class SyncEngine {
         mkdirSync(localChild, { recursive: true })
         await this.#syncDir(sync, remoteChild, localChild)
       } else if (entry.type === 'file') {
+        this.#syncedFiles += 1
         const known = this.#localVersion(localChild)
         if (known !== undefined && known === entry.version) continue
         const file = await this.peerRequest(sync.deviceId, 'read', { path: remoteChild }, 60_000)
@@ -685,7 +752,8 @@ class SyncEngine {
           this.#guardLocal(localChild)
           this.lastApplied.set(localChild, this.#hash(file.content))
           mkdirSync(dirname(localChild), { recursive: true })
-          writeFileSync(localChild, file.content, 'utf8')
+          if (file.binary === true) writeFileSync(localChild, Buffer.from(file.content, 'base64'))
+          else writeFileSync(localChild, file.content, 'utf8')
           const [mtime] = String(file.version).split(':')
           try { futimesSync(localChild, new Date(), new Date(Number(mtime))) } catch { /* best effort */ }
         }
@@ -708,13 +776,43 @@ class SyncEngine {
         if (filename === null || filename === undefined) return
         const localChild = join(sync.localPath, String(filename))
         if (this.#isGuarded(localChild)) return
+        // Per-path coalescing: one timer flushes EVERY changed path (a single
+        // slot dropped all-but-last under bursts — editor multi-save, git mv).
+        sync.pendingPushes ??= new Set()
+        sync.pendingPushes.add(localChild)
         clearTimeout(sync.pushTimer)
-        sync.pushTimer = setTimeout(() => { void this.#pushLocal(sync, localChild) }, 120)
+        sync.pushTimer = setTimeout(() => {
+          const paths = [...sync.pendingPushes]
+          sync.pendingPushes.clear()
+          for (const path of paths) void this.#pushLocal(sync, path)
+        }, 120)
       })
       watcher.on('error', () => { sync.localWatcher = undefined })
       sync.localWatcher = watcher
     } catch (error) {
       console.warn(`[dsh-rich-sync] local watch failed on ${sync.localPath}: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  /** Push every file under a local directory to the remote counterpart. */
+  async #pushTree(sync, localDir, remoteDir) {
+    let names = []
+    try { names = readdirSync(localDir) } catch { return }
+    for (const name of names) {
+      const localChild = join(localDir, name)
+      const remoteChild = `${remoteDir === '/' ? '' : remoteDir}/${name}`
+      const stats = existsSync(localChild) ? statSync(localChild) : undefined
+      if (stats === undefined) continue
+      if (stats.isDirectory()) {
+        await this.peerRequest(sync.deviceId, 'mkdir', { path: remoteChild }, 30_000)
+        await this.#pushTree(sync, localChild, remoteChild)
+      } else if (stats.isFile()) {
+        const raw = readFileSync(localChild)
+        if (raw.includes(0)) continue // binary files are not pushed (text v1)
+        const content = raw.toString('utf8')
+        if (this.lastApplied.get(localChild) === this.#hash(content)) continue
+        await this.peerRequest(sync.deviceId, 'write', { path: remoteChild, content }, 60_000)
+      }
     }
   }
 
@@ -734,7 +832,10 @@ class SyncEngine {
         if (this.lastApplied.get(localChild) === this.#hash(content)) return
         await this.peerRequest(sync.deviceId, 'write', { path: remoteChild, content }, 60_000)
       } else if (stats.isDirectory()) {
+        // Directory events reconcile recursively: mkdir the dir, then push
+        // every file beneath it (a bare mkdir lost children on renames).
         await this.peerRequest(sync.deviceId, 'mkdir', { path: remoteChild }, 30_000)
+        await this.#pushTree(sync, localChild, remoteChild)
       }
     } catch (error) {
       console.warn(`[dsh-rich-sync] push failed for ${localChild}: ${error instanceof Error ? error.message : String(error)}`)
@@ -773,7 +874,8 @@ class SyncEngine {
             this.#guardLocal(localChild)
             this.lastApplied.set(localChild, this.#hash(file.content))
             mkdirSync(dirname(localChild), { recursive: true })
-            writeFileSync(localChild, file.content, 'utf8')
+            if (file.binary === true) writeFileSync(localChild, Buffer.from(file.content, 'base64'))
+            else writeFileSync(localChild, file.content, 'utf8')
           }
         }
       } catch (error) {
@@ -810,6 +912,7 @@ class SyncEngine {
 
   stopAll() {
     this.transmitter.stopAll()
+    for (const sync of this.store.syncs) sync.localWatcher?.close()
     for (const wire of this.hubSockets.values()) wire.socket.close()
     if (this.outbound !== null) this.outbound.socket.close()
   }
@@ -838,8 +941,10 @@ async function readJsonBody(req, limit) {
 function guard(req, res) {
   const remote = req.socket?.remoteAddress ?? ''
   const loopback = remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1'
+  // CSRF fence: same-origin/none fetch metadata only — a bare Origin header
+  // is forgeable by scripts, sec-fetch-site is not (modern browsers).
   const site = req.headers['sec-fetch-site']
-  const browser = site === 'same-origin' || typeof req.headers.origin === 'string'
+  const browser = site === 'same-origin' || site === 'none'
   if (!loopback || !browser) writeJson(res, 403, { ok: false, error: 'forbidden' })
   return loopback && browser
 }
@@ -866,7 +971,11 @@ function makeRoutes(ctx, store, engine) {
           pairingCode: store.identity.pairingCode,
           hubUrl: store.identity.hubUrl,
         },
-        peers: store.peers.map((peer) => ({ ...peer, status: peerStatus(engine, peer.deviceId) })),
+        // Tokens never leave the host: the panel gets identity + status only.
+        peers: store.peers.map((peer) => {
+          const { token, ...safe } = peer
+          return { ...safe, status: peerStatus(engine, peer.deviceId) }
+        }),
         syncs: store.syncs.map((sync) => ({ ...sync, running: engine.mirrorRunning.has(`${sync.deviceId}:${sync.remotePath}`) })),
         mirrorRoot: MIRROR_ROOT,
       })

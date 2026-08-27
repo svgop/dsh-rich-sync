@@ -48,3 +48,26 @@ In-process e2e (`/tmp/rich-sync-e2e.mjs`): 13/13 — hello-hub, pairing
 (accept/wrong-code-rejected/both-sides-stored), list/read over the relay,
 initial mirror, remote→local edit/create/delete, local→remote push
 (echo-loop-free), remote exec, unknown-device refusal.
+
+## Security model (honest, v0.1)
+
+- The hub relay routes by claimed deviceId; **it sees op traffic, including
+  per-peer tokens**. End-to-end auth means the SERVING side validates the
+  token on every op and push — not that the hub is blind. **Point devices at
+  a hub you control** (the intended deployment: your own public node).
+- Identity takeover is refused (a live registration cannot be replaced);
+  pairing knocks are per-socket AND per-claimed-id rate-limited (5 misses →
+  10-minute lockout). Full PAKE (magic-wormhole) remains a v1.1 candidate.
+- HTTP panel routes are loopback + `sec-fetch-site: same-origin|none` only;
+  `/state` never returns tokens. Remote fs/exec is full-root by operator
+  decision (gating planned).
+
+## QC record (2026-08-27)
+
+Two adversarial audit lanes + self-review: 10 host findings (4 P0 verified
+live: relay id clobber, burst-drop + rename data loss, read TOCTOU wedge,
+hello-hub takeover) and 7 client/wiring findings (incl. the load-blocker:
+`dsh.profile.bundles`, not package.json deps, is the composition path) — all
+fixed and re-verified: e2e 19/19, auditor repro scripts rerun (burst 0
+dropped, rename lossless, binary identical, real-module TOCTOU returns in
+0ms). History rewritten before first publish (symlink blob never shipped).

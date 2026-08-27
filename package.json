@@ -55,5 +55,8 @@
         "@deepseek-ai/dsh-client-locale"
       ]
     }
+  },
+  "dependencies": {
+    "ws": "^8.21.3"
   }
 }
