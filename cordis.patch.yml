@@ -1,0 +1,12 @@
+# dsh-rich-sync bundle patch: inserts the dual-face plugin row.
+#
+# Node half (exports "."): device identity + pairing, the websocket hub
+# endpoint (/api/rich-sync/ws upgrade), the salvaged VS Code-shaped fs
+# protocol, the transmitter (serves roots) and subscriber (mirror engine),
+# remote exec channel, workspace registration, and the panel HTTP API.
+#
+# Browser half (exports "./client"): a Devices sidebar entry (skill-explorer
+# family pattern) opening the device manager overlay.
+- insert:
+    - id: rich-sync
+      name: dsh-rich-sync
