@@ -19,7 +19,6 @@ window.__ModuleLoader__.load({
 			"this.hubHint": "The public meeting point both devices dial. Leave empty on the public device itself.",
 			"peers.title": "Linked devices",
 			"peers.empty": "No devices linked yet.",
-			"peers.add": "Add device",
 			"peers.hub": "Hub URL",
 			"peers.id": "Device ID",
 			"peers.code": "Pairing code",
@@ -62,7 +61,6 @@ window.__ModuleLoader__.load({
 			"this.hubHint": "双方设备共同拨号的公共会合点。公共设备本身留空即可。",
 			"peers.title": "已链接设备",
 			"peers.empty": "尚未链接任何设备。",
-			"peers.add": "添加设备",
 			"peers.hub": "Hub 地址",
 			"peers.id": "设备 ID",
 			"peers.code": "配对码",
@@ -155,7 +153,7 @@ window.__ModuleLoader__.load({
 		//#endregion
 		//#region lib/sidebar.js
 		const ENTRY_ATTR = "data-dsh-rich-sync-entry";
-		const FAMILY = ["[data-dsh-taskboard-entry]", "[data-dsh-ssh-entry]", "[data-dsh-skill-explorer-entry]", "[data-dsh-rich-context-entry]", "[data-dsh-generative-ideas-entry]", `[${ENTRY_ATTR}]`];
+		const FAMILY = ["[data-dsh-taskboard-entry]", "[data-dsh-ssh-entry]", "[data-dsh-skill-explorer-entry]", "[data-dsh-rich-context-entry]", "[data-dsh-generative-ideas-entry]", "[data-dsh-rich-tracking-entry]", `[${ENTRY_ATTR}]`];
 		const ICON = `<svg viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1.8" y="2.5" width="6" height="4.5" rx="1"/><rect x="8.2" y="9" width="6" height="4.5" rx="1"/><path d="M4.8 7v2.5a1 1 0 0 0 1 1h2.4M11.2 9V6.5a1 1 0 0 0-1-1H7.8"/></svg>`;
 		function sidebarRoot() {
 			const column = document.querySelector('[data-pane="sidebar"], [class*="sidebarCol"]');
@@ -387,7 +385,7 @@ window.__ModuleLoader__.load({
 				if (state === null) return;
 				idEl.textContent = `${state.identity.name} · ${state.identity.deviceId}`;
 				codeEl.textContent = state.identity.pairingCode;
-				hubInput.value = state.identity.hubUrl ?? "";
+				if (document.activeElement !== hubInput) hubInput.value = state.identity.hubUrl ?? "";
 				// peers
 				peersList.innerHTML = "";
 				if ((state.peers ?? []).length === 0) {
@@ -400,8 +398,8 @@ window.__ModuleLoader__.load({
 					const rowEl = document.createElement("div");
 					rowEl.className = "rsy-peerRow";
 					const dot = document.createElement("span");
-					dot.className = peer.status === "connected" ? "rsy-dot rsy-dotOn" : "rsy-dot";
-					dot.title = t(`peers.status.${peer.status === "connected" ? "connected" : "offline"}`);
+					dot.className = peer.status === "offline" ? "rsy-dot" : "rsy-dot rsy-dotOn";
+					dot.title = t(`peers.status.${peer.status === "connected" ? "connected" : peer.status === "via-hub" ? "via-hub" : "offline"}`);
 					const main = document.createElement("div");
 					main.className = "rsy-peerMain";
 					const name = document.createElement("span");
@@ -410,7 +408,7 @@ window.__ModuleLoader__.load({
 					const meta = document.createElement("span");
 					meta.className = "rsy-peerMeta";
 					const roots = (state.syncs ?? []).filter((s) => s.deviceId === peer.deviceId).map((s) => s.remotePath);
-					meta.textContent = `${peer.deviceId} · ${t(`peers.status.${peer.status === "connected" ? "connected" : "offline"}`)}${roots.length > 0 ? ` · ${t("peers.roots")}: ${roots.join(", ")}` : ""}`;
+					meta.textContent = `${peer.deviceId} · ${t(`peers.status.${peer.status === "connected" ? "connected" : peer.status === "via-hub" ? "via-hub" : "offline"}`)}${roots.length > 0 ? ` · ${t("peers.roots")}: ${roots.join(", ")}` : ""}`;
 					main.append(name, meta);
 					const browseB = btn(t("browse.title"), () => loadBrowse(peer.deviceId, "/"));
 					const unlinkB = btn(t("peers.unlink"), () => {
@@ -508,13 +506,18 @@ window.__ModuleLoader__.load({
 			};
 
 			const joinMirror = (deviceId, remoteDir, name) => {
-				const sync = (state?.syncs ?? []).find((s) => s.deviceId === deviceId && (remoteDir === s.remotePath || remoteDir.startsWith(`${s.remotePath}/`)));
-				if (sync === undefined) return "";
-				const root = sync.remotePath === "/" ? "" : sync.remotePath;
-				const under = remoteDir === sync.remotePath || (root !== "" && remoteDir.startsWith(`${root}/`)) || (root === "" && remoteDir.startsWith("/"));
-				if (!under) return "";
-				const rel = remoteDir === sync.remotePath ? name : `${remoteDir.slice(root.length + 1)}/${name}`;
-				return `${sync.localPath}/${rel}`;
+				const under = (s) => {
+					if (s.deviceId !== deviceId) return false;
+					if (remoteDir === s.remotePath) return true;
+					if (s.remotePath === "/") return remoteDir.startsWith("/");
+					return remoteDir.startsWith(`${s.remotePath}/`);
+				};
+				// Most specific root wins (a `/` sync must not shadow `/home/x/proj`).
+				const match = (state?.syncs ?? []).filter(under).sort((a, b) => (b.remotePath === "/" ? 0 : b.remotePath.length) - (a.remotePath === "/" ? 0 : a.remotePath.length))[0];
+				if (match === undefined) return "";
+				const root = match.remotePath === "/" ? "" : match.remotePath;
+				const rel = remoteDir === match.remotePath ? name : `${remoteDir.slice(root.length + 1)}/${name}`;
+				return `${match.localPath}/${rel}`;
 			};
 
 			const refresh = () => {

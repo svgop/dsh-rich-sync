@@ -38,7 +38,7 @@
  *
  * Zero runtime deps beyond `ws` (already in the profile) + node builtins.
  */
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, unlinkSync, existsSync, statSync, watchFile, rmSync, renameSync, createReadStream, createWriteStream, openSync, closeSync, readSync, writeSync, futimesSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, unlinkSync, existsSync, statSync, watchFile, lstatSync, rmSync, renameSync, createReadStream, createWriteStream, openSync, closeSync, readSync, writeSync, futimesSync } from 'node:fs'
 import { join, dirname, basename, resolve as resolvePath } from 'node:path'
 import { homedir, hostname } from 'node:os'
 import { randomBytes, randomUUID, createHash } from 'node:crypto'
@@ -123,7 +123,7 @@ class SyncStore {
   saveSyncs() {
     // Runtime-only fields (watcher handles, timers) never persist — a
     // truthy {} after restart would stop #watchLocal from re-arming.
-    const clean = this.syncs.map(({ localWatcher, pushTimer, ...rest }) => rest)
+    const clean = this.syncs.map(({ localWatcher, pushTimer, pendingPushes, retryTimer, degraded, ...rest }) => rest)
     writeJsonFile(SYNC_CONFIG_FILE, clean)
   }
 
@@ -147,8 +147,9 @@ class SyncStore {
     this.savePeers()
   }
 
-  dropPeer(id) {
+  dropPeer(id, closeWatcher) {
     this.peers = this.peers.filter((peer) => peer.deviceId !== id)
+    for (const sync of this.syncs) if (sync.deviceId === id) closeWatcher?.(sync)
     this.syncs = this.syncs.filter((sync) => sync.deviceId !== id)
     this.savePeers()
     this.saveSyncs()
@@ -325,6 +326,9 @@ function runExec({ command, cwd }, onChunk, onOrphan) {
   return new Promise((resolvePromise) => {
     const child = spawn('bash', ['-lc', String(command ?? '')], { cwd: normalizeRemotePath(cwd || homedir()) })
     try { child.stdin.end() } catch { /* already gone */ }
+    // Hard ceiling: a hung exec (tail -f, read from tty) must not orphan.
+    const ceiling = setTimeout(() => { try { child.kill('SIGKILL') } catch { /* gone */ } }, 15 * 60_000)
+    child.once('close', () => clearTimeout(ceiling))
     onOrphan?.(child)
     let settled = false
     const settle = (exitCode, error) => {
@@ -475,6 +479,10 @@ class SyncEngine {
   /** Files written by the current initial sync (cap guard). */
   #syncedFiles = 0
 
+  #redialBackoff = 10_000
+
+  #disposed = false
+
   get myId() { return this.store.identity.deviceId }
 
   #guardLocal(path) {
@@ -535,8 +543,18 @@ class SyncEngine {
         if (existing !== undefined && existing !== wire && !existing.closed) {
           throw new Error(`device ${claim} is already connected to this hub`)
         }
+        // Ownership proof for KNOWN ids: the claimed id must present the peer
+        // token (absent-id squatting would otherwise harvest routed tokens).
+        const known = this.store.peer(claim)
+        if (known !== undefined && message.token !== known.token) {
+          throw new Error(`hello-hub: token does not prove ownership of ${claim}`)
+        }
         wire.peerId = claim
+        // Unverified claimants (unknown ids, first contact) may pair but not
+        // receive routed op traffic — end-to-end tokens still gate every op.
+        wire.verified = known !== undefined || claim === this.myId
         this.hubSockets.set(claim, wire)
+        this.#startHeartbeat(wire)
         this.onPeerStateChange?.()
         return { ok: true, hubDeviceId: this.myId, name: this.store.identity.name }
       }
@@ -586,6 +604,7 @@ class SyncEngine {
     if (to === undefined || to === this.myId) return this.#serveLocal(message, wire)
     const target = this.hubSockets.get(to)
     if (target === undefined || target.closed) throw new Error(`device ${to} is not connected to this hub`)
+    if (!target.verified && message.op !== 'pair') throw new Error(`device ${to} has not verified its identity on this hub`)
     if (message.op !== undefined) {
       // NEVER forward the caller's id: target.request mints its own and the
       // result resolves back up this chain — forwarding would clobber the
@@ -595,6 +614,19 @@ class SyncEngine {
     }
     target.send(message)
     return { ok: true }
+  }
+
+  /** Heartbeat: ping every 30s; a socket missing two pongs terminates (zombie TCP). */
+  #startHeartbeat(wire) {
+    wire.alive = true
+    wire.socket.on('pong', () => { wire.alive = true })
+    const timer = setInterval(() => {
+      if (wire.closed) { clearInterval(timer); return }
+      if (!wire.alive) { try { wire.socket.terminate() } catch { /* gone */ }; clearInterval(timer); return }
+      wire.alive = false
+      try { wire.socket.ping() } catch { /* closing */ }
+    }, 30_000)
+    wire.socket.once('close', () => clearInterval(timer))
   }
 
   #inboundPush = async (message, wire) => {
@@ -613,17 +645,18 @@ class SyncEngine {
       return
     }
     if (message.type === 'close-peer') {
-      // The peer unlinked us: drop them, stop serving, close their socket.
-      this.store.dropPeer(peerId)
-      const theirWire = this.hubSockets.get(peerId)
-      theirWire?.socket.close()
-      if (this.outbound !== null) this.outbound.socket.close()
+      // The peer unlinked us: drop them + stop serving their roots. Their
+      // directly-connected socket closes; the shared outbound hub link
+      // stays — other peers still ride it.
+      this.store.dropPeer(peerId, (sync) => sync.localWatcher?.close())
+      this.transmitter.watchRoots.delete(peerId)
+      this.hubSockets.get(peerId)?.socket.close()
       this.onPeerStateChange?.()
       return
     }
     if (message.type === 'exec-out') {
       const parts = this.#execCollectors.get(String(message.execId ?? ''))
-      if (parts !== undefined && parts.length < 4096) parts.push(String(message.chunk ?? ''))
+      if (parts !== undefined && parts.length < 8192) parts.push(String(message.chunk ?? ''))
       return
     }
     if (message.type === 'events') { void this.#applyRemoteEvents(peerId, message.changes) }
@@ -671,10 +704,25 @@ class SyncEngine {
     const wire = new Wire(socket, {
       onRequest: this.#inbound,
       onPush: this.#inboundPush,
-      onClose: () => { if (this.outbound === wire) { this.outbound = null; this.onPeerStateChange?.() } },
+      onClose: () => {
+        if (this.outbound === wire) {
+          this.outbound = null
+          this.onPeerStateChange?.()
+          // Auto-redial with backoff (10s doubling to 5min) while a hub is set.
+          if (String(this.store.identity.hubUrl ?? '') !== '' && !this.#disposed) {
+            this.#redialBackoff = Math.min((this.#redialBackoff ?? 10_000) * 2, 300_000)
+            setTimeout(() => {
+              if (this.outbound === null && !this.#disposed) {
+                this.connectHub().then(() => { this.#redialBackoff = 10_000 }).catch(() => {})
+              }
+            }, this.#redialBackoff)
+          }
+        }
+      },
     })
     this.outbound = wire
-    const hello = await wire.request('hello-hub', { from: this.myId, name: this.store.identity.name })
+    const hubToken = this.store.peers.find((peer) => peer.hubUrl === url)?.token
+    const hello = await wire.request('hello-hub', { from: this.myId, name: this.store.identity.name, ...(hubToken !== undefined ? { token: hubToken } : {}) })
     this.onPeerStateChange?.()
     return { ok: true, hello }
   }
@@ -778,13 +826,30 @@ class SyncEngine {
         if (this.#isGuarded(localChild)) return
         // Per-path coalescing: one timer flushes EVERY changed path (a single
         // slot dropped all-but-last under bursts — editor multi-save, git mv).
-        sync.pendingPushes ??= new Set()
+        if (!(sync.pendingPushes instanceof Set)) sync.pendingPushes = new Set()
         sync.pendingPushes.add(localChild)
         clearTimeout(sync.pushTimer)
         sync.pushTimer = setTimeout(() => {
           const paths = [...sync.pendingPushes]
           sync.pendingPushes.clear()
-          for (const path of paths) void this.#pushLocal(sync, path)
+          for (const path of paths) {
+            this.#pushLocal(sync, path).catch((error) => {
+              // Transient failure (link down): re-queue bounded so the edit is
+              // not silently lost; /state reports degradation.
+              console.warn(`[dsh-rich-sync] push failed (requeued): ${path}: ${error instanceof Error ? error.message : String(error)}`)
+              sync.degraded = true
+              if (!(sync.pendingPushes instanceof Set)) sync.pendingPushes = new Set()
+              if (sync.pendingPushes.size < 1000) sync.pendingPushes.add(path)
+              clearTimeout(sync.retryTimer)
+              sync.retryTimer = setTimeout(() => {
+                const retry = [...sync.pendingPushes]
+                sync.pendingPushes.clear()
+                for (const p of retry) {
+                  this.#pushLocal(sync, p).then(() => { if (sync.pendingPushes.size === 0) sync.degraded = false }).catch(() => {})
+                }
+              }, 5_000)
+            })
+          }
         }, 120)
       })
       watcher.on('error', () => { sync.localWatcher = undefined })
@@ -795,17 +860,21 @@ class SyncEngine {
   }
 
   /** Push every file under a local directory to the remote counterpart. */
-  async #pushTree(sync, localDir, remoteDir) {
+  async #pushTree(sync, localDir, remoteDir, depth = 0) {
+    if (depth > 12) return
     let names = []
     try { names = readdirSync(localDir) } catch { return }
     for (const name of names) {
       const localChild = join(localDir, name)
       const remoteChild = `${remoteDir === '/' ? '' : remoteDir}/${name}`
-      const stats = existsSync(localChild) ? statSync(localChild) : undefined
-      if (stats === undefined) continue
+      // lstat: symlinks never recurse (statSync would follow `ln -s .` into
+      // an unkillable loop) and are never pushed as files.
+      let stats
+      try { stats = lstatSync(localChild) } catch { continue }
+      if (stats.isSymbolicLink()) continue
       if (stats.isDirectory()) {
         await this.peerRequest(sync.deviceId, 'mkdir', { path: remoteChild }, 30_000)
-        await this.#pushTree(sync, localChild, remoteChild)
+        await this.#pushTree(sync, localChild, remoteChild, depth + 1)
       } else if (stats.isFile()) {
         const raw = readFileSync(localChild)
         if (raw.includes(0)) continue // binary files are not pushed (text v1)
@@ -831,6 +900,7 @@ class SyncEngine {
         // Content-identity: never push back what we just applied from the remote.
         if (this.lastApplied.get(localChild) === this.#hash(content)) return
         await this.peerRequest(sync.deviceId, 'write', { path: remoteChild, content }, 60_000)
+        if (sync.pendingPushes instanceof Set && sync.pendingPushes.size === 0) sync.degraded = false
       } else if (stats.isDirectory()) {
         // Directory events reconcile recursively: mkdir the dir, then push
         // every file beneath it (a bare mkdir lost children on renames).
@@ -844,7 +914,11 @@ class SyncEngine {
 
   async #applyRemoteEvents(peerId, changes) {
     for (const change of changes ?? []) {
-      const sync = this.store.syncs.find((entry) => entry.deviceId === peerId && (change.path === entry.remotePath || change.path.startsWith(`${entry.remotePath}/`)))
+      const sync = this.store.syncs.find((entry) => {
+        if (entry.deviceId !== peerId) return false
+        const root = entry.remotePath === '/' ? '' : entry.remotePath
+        return change.path === entry.remotePath || (root !== '' && change.path.startsWith(`${root}/`)) || (root === '' && change.path.startsWith('/'))
+      })
       if (sync === undefined) continue
       const rel = change.path.slice(sync.remotePath.length)
       const localChild = join(sync.localPath, rel)
@@ -903,14 +977,16 @@ class SyncEngine {
     this.#execCollectors.set(execId, parts)
     try {
       const result = await this.peerRequest(peerId, 'exec', { cwd, command, execId }, timeoutMs)
-      const output = parts.join('').slice(0, 262_144)
-      return { ...result, output }
+      const joined = parts.join('')
+      const output = joined.slice(0, 262_144)
+      return { ...result, output, truncated: joined.length > output.length }
     } finally {
       this.#execCollectors.delete(execId)
     }
   }
 
   stopAll() {
+    this.#disposed = true
     this.transmitter.stopAll()
     for (const sync of this.store.syncs) sync.localWatcher?.close()
     for (const wire of this.hubSockets.values()) wire.socket.close()
@@ -976,7 +1052,7 @@ function makeRoutes(ctx, store, engine) {
           const { token, ...safe } = peer
           return { ...safe, status: peerStatus(engine, peer.deviceId) }
         }),
-        syncs: store.syncs.map((sync) => ({ ...sync, running: engine.mirrorRunning.has(`${sync.deviceId}:${sync.remotePath}`) })),
+        syncs: store.syncs.map((sync) => ({ deviceId: sync.deviceId, remotePath: sync.remotePath, localPath: sync.localPath, syncedAt: sync.syncedAt, degraded: sync.degraded === true, pendingPushes: sync.pendingPushes instanceof Set ? sync.pendingPushes.size : 0, running: engine.mirrorRunning.has(`${sync.deviceId}:${sync.remotePath}`) })),
         mirrorRoot: MIRROR_ROOT,
       })
     },
@@ -1155,7 +1231,13 @@ function remoteToolDefinition(ctx, store, engine) {
         const cwd = String(args.cwd ?? '') !== '' ? String(args.cwd) : sync?.remotePath ?? homedir()
         try {
           const result = await engine.execOn(deviceId, { cwd, command: args.command })
-          return { ok: result.exitCode === 0, exitCode: result.exitCode, message: `exit ${result.exitCode}${result.error ? ` (${result.error})` : ''}` }
+          return {
+            ok: result.exitCode === 0,
+            exitCode: result.exitCode,
+            output: result.output,
+            truncated: result.truncated === true,
+            message: `exit ${result.exitCode}${result.error ? ` (${result.error})` : ''}${result.truncated === true ? ' [output truncated]' : ''}`,
+          }
         } catch (error) {
           return { ok: false, message: error instanceof Error ? error.message : String(error) }
         }
