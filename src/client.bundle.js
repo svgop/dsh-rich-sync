@@ -1,6 +1,7 @@
 window.__ModuleLoader__.load({
 	id: "dsh-rich-sync",
 	factory: (require) => {
+		const react_jsx_runtime = require("react/jsx-runtime");
 		var module = { exports: {} };
 		var exports = module.exports;
 		//#region lib/locale.js
@@ -133,7 +134,12 @@ window.__ModuleLoader__.load({
 .rsy-footer{display:flex;align-items:stretch;border-top:1px solid var(--dsw-alias-border-l1)}
 .rsy-status{flex:1;align-self:center;min-width:0;padding:0 12px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .rsy-statusErr{color:var(--dsw-alias-state-error-primary)}
-.rsy-statusOk{color:var(--dsw-alias-state-success-primary)}`;
+.rsy-statusOk{color:var(--dsw-alias-state-success-primary)}
+/* Hosted main-panel mode (sidebar.panellist + main slots). */
+.rsy-main{height:100%;overflow:auto;box-sizing:border-box;background:var(--dsw-specific-sidebar-fill);padding:24px;display:flex;justify-content:center;align-items:flex-start}
+.rsy-main .rsy-scrim{position:static;z-index:auto;background:0 0;padding:0;display:flex;flex-direction:column;width:100%;max-width:860px;height:100%}
+.rsy-main .rsy-card{flex:1;min-height:0;max-height:none;box-shadow:none}
+.rsy-main .rsy-closeBtn{display:none}`;
 		const tagId = "dsh-rich-sync/panel.css";
 		if (typeof document !== "undefined" && document.querySelector(`style[data-plugin-css="${tagId}"]`) === null) {
 			const tag = document.createElement("style");
@@ -151,68 +157,33 @@ window.__ModuleLoader__.load({
 			return r.json();
 		}
 		//#endregion
-		//#region lib/sidebar.js
-		const ENTRY_ATTR = "data-dsh-rich-sync-entry";
-		const FAMILY = ["[data-dsh-taskboard-entry]", "[data-dsh-ssh-entry]", "[data-dsh-skill-explorer-entry]", "[data-dsh-rich-context-entry]", "[data-dsh-generative-ideas-entry]", "[data-dsh-rich-tracking-entry]", `[${ENTRY_ATTR}]`];
-		const ICON = `<svg viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1.8" y="2.5" width="6" height="4.5" rx="1"/><rect x="8.2" y="9" width="6" height="4.5" rx="1"/><path d="M4.8 7v2.5a1 1 0 0 0 1 1h2.4M11.2 9V6.5a1 1 0 0 0-1-1H7.8"/></svg>`;
-		function sidebarRoot() {
-			const column = document.querySelector('[data-pane="sidebar"], [class*="sidebarCol"]');
-			if (column === null) return undefined;
-			return column.querySelector('[class*="logoRow"]')?.parentElement ?? column.firstElementChild ?? undefined;
-		}
-		function newSessionButton(root) {
-			const nested = root.querySelector('button[class*="newSession"]');
-			if (nested !== null) return nested;
-			for (const child of root.children) if (child.tagName === "BUTTON") return child;
-			return undefined;
-		}
-		function mountSidebarEntry(onToggle, isActive, subscribe) {
-			if (document.querySelector(`[${ENTRY_ATTR}]`) !== null) return () => {};
-			const entry = document.createElement("button");
-			entry.type = "button";
-			entry.setAttribute(ENTRY_ATTR, "");
-			entry.setAttribute("data-dsh-plugin", "rich-sync");
-			entry.setAttribute("data-dsh-part", "sidebar-entry");
-			entry.className = "rsy-entry";
-			entry.setAttribute("aria-label", t("entry.tooltip"));
-			entry.setAttribute("title", t("entry.tooltip"));
-			entry.innerHTML = `<span class="rsy-entryIcon">${ICON}</span><span class="rsy-entryLabel">${t("entry.label")}</span>`;
-			entry.addEventListener("click", onToggle);
-			let root, placed = false;
-			const place = () => {
-				const button = root === undefined ? undefined : newSessionButton(root);
-				if (button === undefined) return false;
-				if (entry.parentElement !== root) {
-					const row = button.closest('[class*="logoRow"]');
-					const base = row !== null && row.parentElement === root ? row : button;
-					const family = Array.from(root.children).filter((el) => el instanceof HTMLElement && el.matches(FAMILY.join(", ")));
-					const anchor = family.length > 0 ? family[family.length - 1].nextElementSibling : base.nextElementSibling;
-					root.insertBefore(entry, anchor);
-				}
-				return true;
-			};
-			const tryPlace = () => {
-				if (root !== undefined && !root.isConnected) { rootObserver.disconnect(); root = undefined; placed = false; }
-				if (placed && document.body.contains(entry)) return;
-				root ??= sidebarRoot();
-				if (root === undefined) return;
-				placed = place();
-				if (placed) rootObserver.observe(root, { childList: true, subtree: true });
-			};
-			const waitObserver = new MutationObserver(tryPlace);
-			waitObserver.observe(document.body, { childList: true, subtree: true });
-			const rootObserver = new MutationObserver(() => {
-				if (root === undefined || !root.isConnected) { placed = false; tryPlace(); return; }
-				if (!root.contains(entry)) placed = place();
+		//#region lib/panel-slot.js
+		// Sanctioned surface (0.1.6+): sidebar.panellist row + keyed main panel,
+		// mirroring the built-in Plugins entry. The shell owns the row chrome;
+		// no DOM grafting into React-managed sidebar rows.
+		const PANEL_ID = "rich-sync";
+		const ICON_PATHS = '<rect x="1.8" y="2.5" width="6" height="4.5" rx="1"/><rect x="8.2" y="9" width="6" height="4.5" rx="1"/><path d="M4.8 7v2.5a1 1 0 0 0 1 1h2.4M11.2 9V6.5a1 1 0 0 0-1-1H7.8"/>';
+		function PanelIcon({ size }) {
+			return (0, react_jsx_runtime.jsx)("svg", {
+				viewBox: "0 0 16 16", width: size ?? 18, height: size ?? 18,
+				fill: "none", stroke: "currentColor", strokeWidth: 1.3,
+				strokeLinecap: "round", strokeLinejoin: "round",
+				"aria-hidden": true,
+				dangerouslySetInnerHTML: { __html: ICON_PATHS },
 			});
-			let unsubscribe;
-			if (subscribe !== undefined) {
-				const sync = () => { if (isActive()) entry.setAttribute("data-active", "true"); else entry.removeAttribute("data-active"); };
-				unsubscribe = subscribe(sync);
-				sync();
-			}
-			tryPlace();
-			return () => { waitObserver.disconnect(); rootObserver.disconnect(); if (unsubscribe !== undefined) unsubscribe(); entry.remove(); };
+		}
+		function MainPanel() {
+			return (0, react_jsx_runtime.jsx)("div", {
+				className: "rsy-main",
+				ref: (node) => {
+					if (node === null) return;
+					const panel = createPanel(() => {});
+					panel.classList.add("rsy-hosted");
+					node.append(panel);
+					// React 19 ref cleanup: stops the 5s state poller on unmount.
+					return () => { panel.dispose?.(); };
+				},
+			});
 		}
 		//#endregion
 		//#region lib/panel.js
@@ -539,41 +510,27 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 		//#region lib/index.js
-		const inject = ["locale"];
+		const inject = ["locale", "slots"];
 		function apply(ctx) {
 			ctx.effect(() => ctx.locale.register(NS, { en, zh }), "rich-sync: dictionaries");
-			let open = false;
-			let listeners = new Set();
-			let panel = null;
-			const isOpen = () => open;
-			const subscribe = (listener) => { listeners.add(listener); return () => listeners.delete(listener); };
-			const teardown = () => {
-				setOpen(false);
-				if (panel !== null) { panel.dispose?.(); panel.remove(); panel = null; }
-			};
-			const setOpen = (value) => {
-				if (open === value) return;
-				open = value;
-				for (const listener of [...listeners]) listener();
-			};
-			const toggle = () => {
-				if (open) { teardown(); return; }
-				panel = createPanel(() => teardown());
-				document.body.appendChild(panel);
-				setOpen(true);
-			};
-			const SIDEBAR_ROW_SELECTOR = '[class*="sessionRow"], [class*="projectRow"], [class*="searchResultRow"], [class*="searchResultWorkspace"], [class*="newSession"]';
-			const onSidebarClick = (event) => {
-				if (!open) return;
-				if (event.target !== null && event.target.closest?.(SIDEBAR_ROW_SELECTOR) !== null) teardown();
-			};
-			document.addEventListener("click", onSidebarClick, true);
-			const disposeEntry = mountSidebarEntry(toggle, isOpen, subscribe);
-			return () => {
-				document.removeEventListener("click", onSidebarClick, true);
-				teardown();
-				disposeEntry();
-			};
+
+			// Sidebar + panel ride the sanctioned slots (see lib/panel-slot.js):
+			// the shell owns the row chrome and panel selection; the panel's
+			// poller stops through the React 19 ref cleanup on unmount.
+			ctx.slots.inject("main", () => ctx.slots.register({
+				name: "main",
+				key: PANEL_ID,
+				locale: NS,
+			}, MainPanel));
+			ctx.slots.inject("sidebar.panellist", () => ctx.slots.register({
+				name: "sidebar.panellist",
+				id: PANEL_ID,
+				order: 40,
+				label: () => t("entry.label"),
+				locale: NS,
+			}, PanelIcon));
+
+			return () => {};
 		}
 		exports.apply = apply;
 		exports.inject = inject;
