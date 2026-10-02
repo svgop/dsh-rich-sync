@@ -60,7 +60,7 @@ const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
 const MAX_FILE_BYTES = 8 * 1024 * 1024
 
 export const name = 'dsh-rich-sync'
-export const inject = ['tools', 'webServer', 'workspaceRegistry']
+export const inject = ['tools', 'webServer', 'workspaceRegistry', 'connection']
 
 // ── Store helpers ────────────────────────────────────────────────────────────
 function readJson(file, fallback) {
@@ -1014,7 +1014,18 @@ async function readJsonBody(req, limit) {
   return raw === '' ? undefined : JSON.parse(raw)
 }
 
-function guard(req, res) {
+/**
+ * Route fence: Connection's own Host/Origin + browser-authentication policy —
+ * the same checks the /api channel applies, and the only check that is correct
+ * under BOTH carriers (the desktop page's custom-scheme fetches carry
+ * `sec-fetch-site: cross-site` and no Origin — the old local fence rejected
+ * exactly that legitimate client). The loopback fence survives only as the
+ * fallback when no Connection service is in scope. `guard` is reassigned in
+ * apply().
+ */
+let guard = localGuard
+
+function localGuard(req, res) {
   const remote = req.socket?.remoteAddress ?? ''
   const loopback = remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1'
   // CSRF fence: same-origin/none fetch metadata only — a bare Origin header
@@ -1023,6 +1034,22 @@ function guard(req, res) {
   const browser = site === 'same-origin' || site === 'none'
   if (!loopback || !browser) writeJson(res, 403, { ok: false, error: 'forbidden' })
   return loopback && browser
+}
+
+function makeGuard(ctx) {
+  return (req, res) => {
+    const connection = ctx?.connection
+    if (connection !== undefined && typeof connection.requestRejection === 'function') {
+      const rejection = connection.requestRejection(req)
+      if (rejection !== undefined) {
+        res.writeHead(rejection, { 'content-type': 'text/plain; charset=utf-8' })
+        res.end(rejection === 401 ? 'unauthorized' : 'forbidden')
+        return false
+      }
+      return true
+    }
+    return localGuard(req, res)
+  }
 }
 
 function peerStatus(engine, peerId) {
@@ -1248,6 +1275,7 @@ function remoteToolDefinition(ctx, store, engine) {
 }
 
 export function apply(ctx) {
+  guard = makeGuard(ctx)
   const store = new SyncStore()
   const engine = new SyncEngine(ctx, store)
   ctx.effect(() => {
