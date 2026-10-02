@@ -1,6 +1,6 @@
 {
   "name": "dsh-rich-sync",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Device file streaming for DeepSeek Harness: link another machine over a websocket relay, mirror one of its folders locally as a real directory + native workspace, edit with every tool, run commands remotely, changes stream both directions.",
   "keywords": [
     "deepseek-harness",
@@ -32,10 +32,12 @@
   "exports": {
     ".": "./src/host.js",
     "./client": "./src/client.bundle.js",
+    "./locale/*.json": "./locale/*.json",
     "./package.json": "./package.json"
   },
   "files": [
     "src",
+    "locale",
     "cordis.patch.yml",
     "README.md",
     "DESIGN.md",
@@ -43,7 +45,7 @@
   ],
   "dsh": {
     "engines": {
-      "dsh": ">=0.1.1-rc.2"
+      "dsh": ">=0.1.6-0 || >=0.2.0-rc.0"
     },
     "bundle": {
       "patch": "./cordis.patch.yml"
@@ -51,12 +53,14 @@
     "client": {
       "platform": "web",
       "inject": [
-        "@deepseek-ai/dsh-client-runtime",
         "@deepseek-ai/dsh-client-locale"
       ]
     }
   },
   "dependencies": {
     "ws": "^8.21.3"
+  },
+  "scripts": {
+    "test": "node --test src/*.test.mjs"
   }
 }

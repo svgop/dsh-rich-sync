@@ -1,0 +1,6 @@
+{
+	"meta": {
+		"title": "Rich Sync",
+		"description": "Link another machine over a websocket relay and mirror one of its folders locally as a real directory and native workspace, with two-way streaming."
+	}
+}
