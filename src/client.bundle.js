@@ -1,7 +1,9 @@
 window.__ModuleLoader__.load({
 	id: "dsh-rich-sync",
 	factory: (require) => {
-		const react_jsx_runtime = require("react/jsx-runtime");
+		let react = require("react");
+		let react_jsx_runtime = require("react/jsx-runtime");
+		let _deepseek_ai_dsh_client_ui_primitives = require("@deepseek-ai/dsh-client-ui-primitives");
 		var module = { exports: {} };
 		var exports = module.exports;
 		//#region lib/locale.js
@@ -26,12 +28,16 @@ window.__ModuleLoader__.load({
 			"peers.code": "Pairing code",
 			"peers.link": "Link",
 			"peers.unlink": "Unlink",
+			"peers.unlinkTitle": "Unlink device",
+			"peers.unlinkBody": "This revokes the device's token and stops syncing its folders. Files already mirrored stay on disk.",
 			"peers.status.connected": "connected",
 			"peers.status.via-hub": "via hub",
 			"peers.status.offline": "offline",
 			"peers.roots": "synced roots",
 			"browse.title": "Browse device",
-			"browse.up": "↑ up",
+			"browse.hint": "Pick a linked device above to browse its files.",
+			"browse.up": "Up",
+			"browse.loading": "loading…",
 			"browse.refresh": "refresh",
 			"browse.sync": "Sync this folder",
 			"browse.workspace": "Workspace",
@@ -39,6 +45,8 @@ window.__ModuleLoader__.load({
 			"mirrors.title": "Mirrored folders",
 			"mirrors.empty": "Nothing mirrored yet — browse a device and sync a folder.",
 			"mirrors.open": "Open",
+			"mirrors.syncing": "initial sync running",
+			"mirrors.degraded": "push failures — retrying",
 			"status.linked": "device linked",
 			"status.synced": "mirror ready + workspace registered",
 			"status.workspace": "workspace registered",
@@ -48,6 +56,7 @@ window.__ModuleLoader__.load({
 			"mirrors.hint": "start a new session and pick this workspace",
 			"error.generic": "failed",
 			"action.close": "Close",
+			"action.cancel": "Cancel",
 		};
 		const zh = {
 			"entry.label": "设备",
@@ -69,12 +78,16 @@ window.__ModuleLoader__.load({
 			"peers.code": "配对码",
 			"peers.link": "链接",
 			"peers.unlink": "解除",
+			"peers.unlinkTitle": "解除链接设备",
+			"peers.unlinkBody": "此操作将吊销该设备的令牌并停止同步其文件夹；已镜像到本地的文件会保留在磁盘上。",
 			"peers.status.connected": "已连接",
 			"peers.status.via-hub": "经中继",
 			"peers.status.offline": "离线",
 			"peers.roots": "同步根",
 			"browse.title": "浏览设备",
-			"browse.up": "↑ 上级",
+			"browse.hint": "在上方选择一台已链接的设备，即可浏览它的文件。",
+			"browse.up": "上级",
+			"browse.loading": "读取中…",
 			"browse.refresh": "刷新",
 			"browse.sync": "同步此文件夹",
 			"browse.workspace": "工作区",
@@ -82,6 +95,8 @@ window.__ModuleLoader__.load({
 			"mirrors.title": "已镜像文件夹",
 			"mirrors.empty": "尚未镜像——浏览设备并同步一个文件夹。",
 			"mirrors.open": "打开",
+			"mirrors.syncing": "初始同步进行中",
+			"mirrors.degraded": "推送失败，正在重试",
 			"status.linked": "设备已链接",
 			"status.synced": "镜像就绪并注册工作区",
 			"status.workspace": "工作区已注册",
@@ -91,69 +106,62 @@ window.__ModuleLoader__.load({
 			"mirrors.hint": "新建会话并选择该工作区",
 			"error.generic": "失败",
 			"action.close": "关闭",
+			"action.cancel": "取消",
 		};
 		const lang = (typeof navigator !== "undefined" && /^(zh)/i.test(navigator.language ?? "")) ? "zh" : "en";
 		const dict = { en, zh };
 		const t = (key) => dict[lang][key] ?? dict.en[key] ?? key;
 		//#endregion
 		//#region lib/styles.js
-		const css = `.rsy-entry{appearance:none;box-sizing:border-box;display:flex;align-items:center;gap:8px;width:100%;height:36px;padding:0 10px;font:inherit;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary);background:0 0;border:none;border-radius:8px;cursor:pointer;text-align:left}
-.rsy-entry:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
-.rsy-entry[data-active="true"]{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
-.rsy-entryIcon{display:inline-flex;justify-content:center;align-items:center;width:24px;height:24px;flex:none;color:var(--dsw-alias-label-tertiary)}
-.rsy-entryLabel{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.rsy-scrim{position:fixed;inset:0;z-index:90;background:var(--dsw-alias-bg-mask-1);backdrop-filter:var(--dsw-mask-blur);display:flex;align-items:center;justify-content:center;padding:24px}
-.rsy-card{width:100%;max-width:760px;max-height:min(90vh,1100px);border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);border-radius:var(--dsw-radius-panel);display:flex;flex-direction:column;overflow:hidden;box-shadow:var(--dsw-elevation-prominent)}
-.rsy-card,.rsy-card *{box-sizing:border-box}
-.rsy-head{display:flex;align-items:center;gap:10px;padding:14px 16px 10px}
-.rsy-title{font-size:14px;font-weight:500;line-height:20px;color:var(--dsw-alias-label-primary);flex:none}
-.rsy-headText{min-width:0;display:flex;flex-direction:column;align-items:flex-start}
-.rsy-intro{display:none}
-.rsy-closeBtn{flex:none;margin-left:auto;width:28px;height:28px;display:grid;place-items:center;color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;border-radius:999px;font-size:16px}
-.rsy-closeBtn:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
-.rsy-body{flex:1;min-height:0;display:flex;flex-direction:column;overflow-y:auto;scrollbar-width:none}
-.rsy-body::-webkit-scrollbar{display:none}
-.rsy-section{border-bottom:1px solid var(--dsw-alias-border-l1);padding:10px 16px;display:flex;flex-direction:column;gap:8px}
-.rsy-sectionTitle{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:14px;text-transform:uppercase;letter-spacing:.05em}
-.rsy-row{display:flex;align-items:center;gap:10px;min-height:30px}
-.rsy-label{flex:none;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px;width:88px}
-.rsy-mono{min-width:0;flex:1;color:var(--dsw-alias-label-primary);font-size:12px;line-height:16px;font-family:ui-monospace,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.rsy-btn{appearance:none;background:0 0;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;padding:3px 10px;font:inherit;font-size:12px;line-height:16px;color:var(--dsw-alias-label-secondary);cursor:pointer;flex:none}
-.rsy-btn:hover{border-color:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-state-business-primary)}
-.rsy-input{min-width:0;flex:1;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-base);border-radius:8px;color:var(--dsw-alias-label-primary);font:inherit;font-size:12.5px;padding:4px 8px;outline:none;font-family:ui-monospace,monospace}
-.rsy-input:focus{border-color:var(--dsw-alias-state-business-primary)}
-.rsy-note{color:var(--dsw-alias-label-caption);font-size:11px;line-height:14px}
-.rsy-dot{width:7px;height:7px;border-radius:999px;flex:none;background:var(--dsw-alias-label-caption)}
-.rsy-dotOn{background:var(--dsw-alias-state-success-primary)}
-.rsy-peerRow{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--dsw-alias-border-l1)}
-.rsy-peerRow:last-child{border-bottom:none}
-.rsy-peerMain{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
-.rsy-peerName{color:var(--dsw-alias-label-primary);font-size:13px;line-height:17px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.rsy-peerMeta{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:14px;font-family:ui-monospace,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.rsy-fileRow{display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--dsw-alias-border-l1);cursor:pointer}
-.rsy-fileRow:hover{background:var(--dsw-alias-interactive-bg-hover)}
-.rsy-fileRow:last-child{border-bottom:none}
-.rsy-fileIcon{flex:none;width:16px;text-align:center;color:var(--dsw-alias-label-tertiary);font-size:12px}
-.rsy-fileName{flex:1;min-width:0;color:var(--dsw-alias-label-primary);font-size:12.5px;line-height:17px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.rsy-footer{display:flex;align-items:stretch;border-top:1px solid var(--dsw-alias-border-l1)}
-.rsy-status{flex:1;align-self:center;min-width:0;padding:0 12px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.rsy-statusErr{color:var(--dsw-alias-state-error-primary)}
-.rsy-statusOk{color:var(--dsw-alias-state-success-primary)}
-/* Hosted main-panel mode (sidebar.panellist + main slots) — native page template:
-   transparent page (main column paints --dsw-alias-bg-base), 960px column,
-   pageHead anatomy, sections directly on the page, no dialog-card chrome. */
+		// Wave 2: layout glue ONLY. Every control is a native ui-primitives
+		// component (Button, Input, StateDot, PathLabel, FileTypeIcon, Tooltip,
+		// Modal); the hand-rolled .rsy-btn/.rsy-input/.rsy-dot/.rsy-fileIcon/
+		// dialog-card styles were deleted, not re-tokenized.
+		const css = `/* Hosted main-panel page frame (native page template, kept from wave 1):
+   transparent page — the main column paints --dsw-alias-bg-base — 960px column,
+   pageHead anatomy, 32px section rhythm. */
 .rsy-main{height:100%;overflow:auto;box-sizing:border-box;padding:0 clamp(24px,4vw,48px) 48px;display:flex;justify-content:center;align-items:flex-start}
-.rsy-main .rsy-scrim{position:static;z-index:auto;background:0 0;backdrop-filter:none;padding:0;display:flex;flex-direction:column;width:100%;max-width:960px}
-.rsy-main .rsy-card{flex:1;min-height:0;max-height:none;background:0 0;border:none;border-radius:0;box-shadow:none;overflow:visible}
-.rsy-main .rsy-head{justify-content:space-between;align-items:flex-start;gap:16px;padding:28px 0 0}
-[data-platform=darwin] .rsy-main .rsy-head{padding-top:calc(28px + var(--dsh-frame-top-clearance,0px))}
-.rsy-main .rsy-title{font-size:20px;line-height:28px}
-.rsy-main .rsy-intro{display:flex;color:var(--dsw-alias-label-secondary);margin:4px 0 0;font-size:13px;line-height:20px}
-.rsy-main .rsy-body{overflow:visible;gap:32px;padding:32px 0 0}
-.rsy-main .rsy-section{padding:10px 0}
-.rsy-main .rsy-footer{margin-top:32px}
-.rsy-main .rsy-status{padding:0}
-.rsy-main .rsy-closeBtn{display:none}`;
+.rsy-page{width:100%;max-width:960px;display:flex;flex-direction:column;gap:32px}
+.rsy-head{box-sizing:border-box;display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding-top:28px}
+[data-platform=darwin] .rsy-head{padding-top:calc(28px + var(--dsh-frame-top-clearance,0px))}
+.rsy-title{margin:0;font-size:20px;font-weight:500;line-height:28px;color:var(--dsw-alias-label-primary)}
+.rsy-intro{color:var(--dsw-alias-label-secondary);margin:4px 0 0;font-size:13px;line-height:20px}
+/* Native group-head grammar (Plugins page): groupTitle 14px/500/22 with an
+   optional count in label-caption tabular-nums. */
+.rsy-group{display:flex;flex-direction:column;gap:8px}
+.rsy-groupHead{display:flex;align-items:baseline;gap:8px}
+.rsy-groupTitle{margin:0;font-size:14px;font-weight:500;line-height:22px;color:var(--dsw-alias-label-primary)}
+.rsy-count{color:var(--dsw-alias-label-caption);font-variant-numeric:tabular-nums;font-size:14px}
+/* Key-value rows: the 88px label-tertiary column and the mono value are the
+   page's own layout glue; controls and paths render through primitives. */
+.rsy-row{display:flex;align-items:center;gap:10px;min-height:32px}
+.rsy-label{flex:none;width:88px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px}
+.rsy-mono{min-width:0;flex:1;color:var(--dsw-alias-label-primary);font-size:12px;line-height:16px;font-family:ui-monospace,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rsy-note{margin:0;color:var(--dsw-alias-label-caption);font-size:11px;line-height:14px}
+.rsy-input{flex:1;min-width:0}
+/* List rows (peers, mirrors, browse entries): hover-row glue on the native
+   interactive token; icon and status glyphs come from primitives. */
+.rsy-list{display:flex;flex-direction:column;gap:2px}
+.rsy-itemRow{display:flex;align-items:center;gap:10px;padding:6px 8px;margin:0 -8px;border-radius:var(--dsw-radius-md)}
+.rsy-itemRowCanClick{cursor:pointer}
+.rsy-itemRow:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.rsy-itemMain{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.rsy-itemName{color:var(--dsw-alias-label-primary);font-size:13px;line-height:17px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rsy-itemNameLine{min-width:0;display:flex;align-items:center;gap:8px}
+.rsy-itemId{flex:none;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px;font-family:ui-monospace,monospace}
+.rsy-itemMeta{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:14px;font-family:ui-monospace,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rsy-itemIcon{flex:none;display:inline-flex;color:var(--dsw-alias-label-secondary)}
+/* PathLabel fills a row (flex:1); inside the column stack of a mirror row it
+   must not grow vertically. */
+.rsy-itemPath{flex:none}
+.rsy-dotText{display:inline-flex;align-items:center;gap:6px}
+.rsy-browseBar{display:flex;align-items:center;gap:10px;min-height:32px}
+.rsy-browseId{flex:none;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px;font-family:ui-monospace,monospace}
+/* Footer status: plain text on state tokens. */
+.rsy-footer{display:flex}
+.rsy-status{flex:1;min-width:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rsy-statusErr{color:var(--dsw-alias-state-error-primary)}
+.rsy-statusOk{color:var(--dsw-alias-state-success-primary)}`;
 		const tagId = "dsh-rich-sync/panel.css";
 		if (typeof document !== "undefined" && document.querySelector(`style[data-plugin-css="${tagId}"]`) === null) {
 			const tag = document.createElement("style");
@@ -186,318 +194,169 @@ window.__ModuleLoader__.load({
 				dangerouslySetInnerHTML: { __html: ICON_PATHS },
 			});
 		}
-		function MainPanel() {
-			return (0, react_jsx_runtime.jsx)("div", {
-				className: "rsy-main",
-				ref: (node) => {
-					if (node === null) return;
-					const panel = createPanel(() => {});
-					panel.classList.add("rsy-hosted");
-					node.append(panel);
-					// React 19 ref cleanup: stops the 5s state poller on unmount.
-					return () => { panel.dispose?.(); };
-				},
-			});
-		}
 		//#endregion
 		//#region lib/panel.js
-		function createPanel(onClose) {
-			let state = null;
-			let browse = null; // { deviceId, path }
-			let statusEl;
+		// Wave 2: the panel is a React component tree built from the app's own
+		// ui-primitives. The pure-DOM createPanel builder was deleted; the
+		// fetch/action logic and the 5s poll + teardown below are the same
+		// behavior, ported into hooks.
+		const { useState, useEffect, useRef, useCallback } = react;
 
-			const setStatus = (kind, text) => {
-				statusEl.textContent = text ?? "";
-				statusEl.className = kind === "error" ? "rsy-status rsy-statusErr" : kind === "ok" ? "rsy-status rsy-statusOk" : "rsy-status";
+		// Peer status (host emits connected | via-hub | offline): a live link —
+		// direct or relayed — is "done"; only offline is idle.
+		const peerDotState = (status) => (status === "offline" ? "idle" : "done");
+		const peerStatusKey = (status) => (status === "connected" ? "peers.status.connected" : status === "via-hub" ? "peers.status.via-hub" : "peers.status.offline");
+		// Mirror health: initial sync running → ongoing (native spinner),
+		// degraded pushes → error, steady → done.
+		const mirrorDotState = (sync) => (sync.running === true ? "ongoing" : sync.degraded === true ? "error" : "done");
+		const mirrorDotTitleKey = (sync) => (sync.running === true ? "mirrors.syncing" : sync.degraded === true ? "mirrors.degraded" : "status.synced");
+
+		/** Native group head: 14px/500 title + optional tabular-nums count. */
+		function GroupHead({ titleKey, count }) {
+			return (0, react_jsx_runtime.jsxs)("div", {
+				className: "rsy-groupHead",
+				children: [
+					(0, react_jsx_runtime.jsx)("h3", { className: "rsy-groupTitle", children: t(titleKey) }),
+					count === undefined ? null : (0, react_jsx_runtime.jsx)("span", { className: "rsy-count", children: count }),
+				],
+			});
+		}
+
+		/** Key-value row: fixed 88px label-tertiary column + caller-owned value. */
+		function KVRow({ labelKey, children }) {
+			return (0, react_jsx_runtime.jsxs)("div", {
+				className: "rsy-row",
+				children: [
+					(0, react_jsx_runtime.jsx)("span", { className: "rsy-label", children: t(labelKey) }),
+					children,
+				],
+			});
+		}
+
+		/** Icon-only ghost sm Button with its Tooltip + accessible label. */
+		function IconAction({ label, icon, onClick, disabled }) {
+			return (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
+				label,
+				side: "bottom",
+				delayMs: 500,
+				disabled: disabled === true,
+				children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+					variant: "ghost",
+					size: "sm",
+					"aria-label": label,
+					disabled,
+					onClick,
+					children: icon,
+				}),
+			});
+		}
+
+		function MainPanel() {
+			const [state, setState] = useState(null);
+			const [status, setStatus] = useState({ kind: "", text: "" });
+			const [hubDraft, setHubDraft] = useState("");
+			const [add, setAdd] = useState({ hub: "", id: "", code: "" });
+			const [browse, setBrowse] = useState(null); // { deviceId, path, entries: null | [] }
+			const [unlinkTarget, setUnlinkTarget] = useState(null); // peer pending unlink confirm
+			const hubFocused = useRef(false);
+			const browseSeq = useRef(0); // last issued browse request (drop stale replies)
+
+			const refresh = useCallback(() => {
+				getState().then((s) => {
+					if (s.ok !== true) throw new Error(s.error);
+					setState(s);
+					// Follow the server's hub URL unless the user is editing it.
+					if (hubFocused.current === false) setHubDraft(s.identity.hubUrl ?? "");
+				}).catch(() => setStatus({ kind: "error", text: t("error.generic") }));
+			}, []);
+
+			// Same 5s state poll the pure-DOM panel ran; the interval dies on unmount.
+			useEffect(() => {
+				refresh();
+				const timer = window.setInterval(refresh, 5000);
+				return () => { window.clearInterval(timer); };
+			}, [refresh]);
+
+			const copyText = (text) => { try { void _deepseek_ai_dsh_client_ui_primitives.writeClipboard(text); } catch { /* best effort */ } };
+			const failWith = (cause) => setStatus({ kind: "error", text: `${t("error.generic")}: ${cause.message}` });
+
+			const refreshCode = () => {
+				post("code").then((r) => {
+					if (r.ok !== true) return;
+					setStatus({ kind: "ok", text: t("status.saved") });
+					refresh();
+				}).catch(() => setStatus({ kind: "error", text: t("error.generic") }));
 			};
-			const copyText = (text) => { try { void navigator.clipboard?.writeText(text); } catch { /* best effort */ } };
-
-			let handleClose = () => onClose();
-			const scrim = document.createElement("div");
-			scrim.className = "rsy-scrim";
-			scrim.addEventListener("click", (event) => { if (event.target === scrim) handleClose(); });
-			const card = document.createElement("div");
-			card.className = "rsy-card";
-			card.setAttribute("aria-label", t("panel.title"));
-			const head = document.createElement("div");
-			head.className = "rsy-head";
-			// Native pageHead anatomy: text block (title + intro) left, actions right.
-			// The intro renders hosted-mode only; overlay dialogs keep the compact head.
-			const headText = document.createElement("div");
-			headText.className = "rsy-headText";
-			const title = document.createElement("span");
-			title.className = "rsy-title";
-			title.textContent = t("panel.title");
-			const intro = document.createElement("span");
-			intro.className = "rsy-intro";
-			intro.textContent = t("panel.intro");
-			headText.append(title, intro);
-			const closeBtn = document.createElement("button");
-			closeBtn.type = "button";
-			closeBtn.className = "rsy-closeBtn";
-			closeBtn.setAttribute("aria-label", t("action.close"));
-			closeBtn.textContent = "×";
-			closeBtn.addEventListener("click", () => handleClose());
-			head.append(headText, closeBtn);
-			card.append(head);
-
-			const body = document.createElement("div");
-			body.className = "rsy-body";
-
-			const section = (titleKey) => {
-				const el = document.createElement("div");
-				el.className = "rsy-section";
-				const h = document.createElement("span");
-				h.className = "rsy-sectionTitle";
-				h.textContent = t(titleKey);
-				el.append(h);
-				body.append(el);
-				return el;
+			const saveHub = () => {
+				post("hub", { url: hubDraft.trim() }).then((r) => {
+					if (r.ok !== true) return;
+					setStatus({ kind: "ok", text: t("status.saved") });
+					refresh();
+				}).catch(() => setStatus({ kind: "error", text: t("error.generic") }));
 			};
-			const row = (labelKey, ...children) => {
-				const el = document.createElement("div");
-				el.className = "rsy-row";
-				const label = document.createElement("span");
-				label.className = "rsy-label";
-				label.textContent = t(labelKey);
-				el.append(label, ...children);
-				return el;
+			const connectHub = () => {
+				post("connect", {}).then((r) => setStatus(r.ok === true
+					? { kind: "ok", text: t("status.saved") }
+					: { kind: "error", text: r.error ?? t("error.generic") })).catch(() => setStatus({ kind: "error", text: t("error.generic") }));
 			};
-			const btn = (label, onClick, cls = "rsy-btn") => {
-				const b = document.createElement("button");
-				b.type = "button";
-				b.className = cls;
-				b.textContent = label;
-				b.addEventListener("click", onClick);
-				return b;
-			};
-
-			// ── This device ──
-			const thisSection = section("this.title");
-			const idEl = document.createElement("span");
-			idEl.className = "rsy-mono";
-			idEl.title = t("this.copy");
-			idEl.addEventListener("click", () => copyText(idEl.textContent));
-			thisSection.append(row("this.id", idEl));
-			const codeEl = document.createElement("span");
-			codeEl.className = "rsy-mono";
-			const codeBtn = btn(t("this.refresh"), () => post("code").then((r) => { if (r.ok === true) { codeEl.textContent = r.pairingCode; setStatus("ok", t("status.saved")); } }).catch(() => setStatus("error", t("error.generic"))));
-			thisSection.append(row("this.code", codeEl, codeBtn));
-			const hubInput = document.createElement("input");
-			hubInput.className = "rsy-input";
-			hubInput.spellcheck = false;
-			hubInput.placeholder = "wss://host.example/api/rich-sync/ws";
-			const hubSave = btn(t("this.hubSave"), () => post("hub", { url: hubInput.value.trim() }).then((r) => { if (r.ok === true) { state.identity.hubUrl = r.hubUrl; setStatus("ok", t("status.saved")); refresh(); } }).catch(() => setStatus("error", t("error.generic"))));
-			const hubConnect = btn(t("this.connect"), () => post("connect", {}).then((r) => setStatus(r.ok === true ? "ok" : "error", r.ok === true ? t("status.saved") : (r.error ?? "failed"))).catch(() => setStatus("error", t("error.generic"))));
-			thisSection.append(row("this.hub", hubInput, hubSave, hubConnect));
-			const hubNote = document.createElement("span");
-			hubNote.className = "rsy-note";
-			hubNote.textContent = t("this.hubHint");
-			thisSection.append(hubNote);
-
-			// ── Linked devices ──
-			const peersSection = section("peers.title");
-			const peersList = document.createElement("div");
-			peersSection.append(peersList);
-			const addForm = document.createElement("div");
-			addForm.className = "rsy-row";
-			const addHub = document.createElement("input");
-			addHub.className = "rsy-input";
-			addHub.spellcheck = false;
-			addHub.placeholder = t("peers.hub");
-			const addId = document.createElement("input");
-			addId.className = "rsy-input";
-			addId.spellcheck = false;
-			addId.placeholder = t("peers.id");
-			addId.style.flex = "0.6";
-			const addCode = document.createElement("input");
-			addCode.className = "rsy-input";
-			addCode.spellcheck = false;
-			addCode.placeholder = t("peers.code");
-			addCode.style.flex = "0.5";
-			const addBtn = btn(t("peers.link"), () => {
-				post("link", { hubUrl: addHub.value.trim(), deviceId: addId.value.trim(), code: addCode.value.trim() })
+			const linkPeer = () => {
+				post("link", { hubUrl: add.hub.trim(), deviceId: add.id.trim(), code: add.code.trim() })
 					.then((r) => {
 						if (r.ok !== true) throw new Error(r.error);
-						setStatus("ok", `${t("status.linked")}: ${r.peer.name} (${r.peer.deviceId})`);
-						addId.value = "";
-						addCode.value = "";
+						setStatus({ kind: "ok", text: `${t("status.linked")}: ${r.peer.name} (${r.peer.deviceId})` });
+						setAdd((prev) => ({ ...prev, id: "", code: "" }));
 						refresh();
 					})
-					.catch((cause) => setStatus("error", `${t("error.generic")}: ${cause.message}`));
-			});
-			addBtn.style.borderColor = "var(--dsw-alias-state-business-primary)";
-			addForm.append(addHub, addId, addCode, addBtn);
-			peersSection.append(addForm);
-
-			// ── Browse ──
-			const browseSection = section("browse.title");
-			const browseBar = document.createElement("div");
-			browseBar.className = "rsy-row";
-			const browsePath = document.createElement("span");
-			browsePath.className = "rsy-mono";
-			const upBtn = btn(t("browse.up"), () => { if (browse !== null && browse.path !== "/") loadBrowse(browse.deviceId, dirnameOf(browse.path)); });
-			const refreshBtn = btn(t("browse.refresh"), () => { if (browse !== null) loadBrowse(browse.deviceId, browse.path); });
-			const syncBtn = btn(t("browse.sync"), () => {
+					.catch(failWith);
+			};
+			const confirmUnlink = () => {
+				const target = unlinkTarget;
+				if (target === null) return;
+				setUnlinkTarget(null);
+				post("unlink", { deviceId: target.deviceId })
+					.then((r) => { if (r.ok !== true) throw new Error(r.error); refresh(); })
+					.catch(failWith);
+			};
+			const loadBrowse = (deviceId, path) => {
+				const seq = browseSeq.current + 1;
+				browseSeq.current = seq;
+				setBrowse({ deviceId, path, entries: null });
+				post("browse", { deviceId, path })
+					.then((r) => {
+						if (r.ok !== true) throw new Error(r.error);
+						if (browseSeq.current !== seq) return;
+						setBrowse({ deviceId, path, entries: r.entries ?? [] });
+					})
+					.catch((cause) => {
+						if (browseSeq.current !== seq) return;
+						setStatus({ kind: "error", text: `${t("error.generic")}: ${cause.message}` });
+						setBrowse((current) => (current !== null && current.deviceId === deviceId && current.path === path ? { ...current, entries: [] } : current));
+					});
+			};
+			const syncFolder = () => {
 				if (browse === null) return;
 				post("sync", { deviceId: browse.deviceId, remotePath: browse.path })
 					.then((r) => {
 						if (r.ok !== true) throw new Error(r.error);
-						setStatus("ok", `${t("status.synced")} — ${r.sync.localPath}`);
+						setStatus({ kind: "ok", text: `${t("status.synced")} — ${r.sync.localPath}` });
 						refresh();
 					})
-					.catch((cause) => setStatus("error", `${t("error.generic")}: ${cause.message}`));
-			});
-			syncBtn.style.borderColor = "var(--dsw-alias-state-business-primary)";
-			browseBar.append(upBtn, browsePath, refreshBtn, syncBtn);
-			browseSection.append(browseBar);
-			const browseList = document.createElement("div");
-			browseSection.append(browseList);
+					.catch(failWith);
+			};
+			const registerWorkspace = (path) => {
+				post("workspace", { path })
+					.then((res2) => { if (res2.ok !== true) throw new Error(res2.error); setStatus({ kind: "ok", text: t("status.workspace") }); })
+					.catch(failWith);
+			};
+			const openMirror = (sync) => {
+				copyText(sync.localPath);
+				setStatus({ kind: "ok", text: `${sync.localPath} — ${t("mirrors.hint")}` });
+			};
 
-			// ── Mirrors ──
-			const mirrorsSection = section("mirrors.title");
-			const mirrorsList = document.createElement("div");
-			mirrorsSection.append(mirrorsList);
-
-			card.append(body);
-
-			const footer = document.createElement("div");
-			footer.className = "rsy-footer";
-			statusEl = document.createElement("span");
-			statusEl.className = "rsy-status";
-			footer.append(statusEl);
-			card.append(footer);
-			scrim.append(card);
-
-			function dirnameOf(path) {
+			const dirnameOf = (path) => {
 				const cut = path.lastIndexOf("/");
 				return cut <= 0 ? "/" : path.slice(0, cut);
-			}
-
-			const renderState = () => {
-				if (state === null) return;
-				idEl.textContent = `${state.identity.name} · ${state.identity.deviceId}`;
-				codeEl.textContent = state.identity.pairingCode;
-				if (document.activeElement !== hubInput) hubInput.value = state.identity.hubUrl ?? "";
-				// peers
-				peersList.innerHTML = "";
-				if ((state.peers ?? []).length === 0) {
-					const empty = document.createElement("span");
-					empty.className = "rsy-note";
-					empty.textContent = t("peers.empty");
-					peersList.append(empty);
-				}
-				for (const peer of state.peers ?? []) {
-					const rowEl = document.createElement("div");
-					rowEl.className = "rsy-peerRow";
-					const dot = document.createElement("span");
-					dot.className = peer.status === "offline" ? "rsy-dot" : "rsy-dot rsy-dotOn";
-					dot.title = t(`peers.status.${peer.status === "connected" ? "connected" : peer.status === "via-hub" ? "via-hub" : "offline"}`);
-					const main = document.createElement("div");
-					main.className = "rsy-peerMain";
-					const name = document.createElement("span");
-					name.className = "rsy-peerName";
-					name.textContent = peer.name;
-					const meta = document.createElement("span");
-					meta.className = "rsy-peerMeta";
-					const roots = (state.syncs ?? []).filter((s) => s.deviceId === peer.deviceId).map((s) => s.remotePath);
-					meta.textContent = `${peer.deviceId} · ${t(`peers.status.${peer.status === "connected" ? "connected" : peer.status === "via-hub" ? "via-hub" : "offline"}`)}${roots.length > 0 ? ` · ${t("peers.roots")}: ${roots.join(", ")}` : ""}`;
-					main.append(name, meta);
-					const browseB = btn(t("browse.title"), () => loadBrowse(peer.deviceId, "/"));
-					const unlinkB = btn(t("peers.unlink"), () => {
-						if (window.confirm(`${t("peers.unlinkConfirm")} ${peer.name}?`)) post("unlink", { deviceId: peer.deviceId })
-							.then((r) => { if (r.ok !== true) throw new Error(r.error); refresh(); })
-							.catch((cause) => setStatus("error", `${t("error.generic")}: ${cause.message}`));
-					});
-					rowEl.append(dot, main, browseB, unlinkB);
-					peersList.append(rowEl);
-				}
-				// mirrors
-				mirrorsList.innerHTML = "";
-				if ((state.syncs ?? []).length === 0) {
-					const empty = document.createElement("span");
-					empty.className = "rsy-note";
-					empty.textContent = t("mirrors.empty");
-					mirrorsList.append(empty);
-				}
-				for (const sync of state.syncs ?? []) {
-					const rowEl = document.createElement("div");
-					rowEl.className = "rsy-peerRow";
-					const main = document.createElement("div");
-					main.className = "rsy-peerMain";
-					const name = document.createElement("span");
-					name.className = "rsy-peerName";
-					name.textContent = `${sync.deviceId} · ${sync.remotePath}`;
-					const meta = document.createElement("span");
-					meta.className = "rsy-peerMeta";
-					meta.textContent = sync.localPath;
-					meta.title = sync.localPath;
-					main.append(name, meta);
-					const openB = btn(t("mirrors.open"), () => { copyText(sync.localPath); setStatus("ok", `${sync.localPath} — ${t("mirrors.hint")}`); });
-					rowEl.append(main, openB);
-					mirrorsList.append(rowEl);
-				}
 			};
-
-			const loadBrowse = (deviceId, path) => {
-				browse = { deviceId, path };
-				browsePath.textContent = `${deviceId}:${path}`;
-				browseList.innerHTML = "";
-				post("browse", { deviceId, path })
-					.then((r) => {
-						if (r.ok !== true) throw new Error(r.error);
-						if ((r.entries ?? []).length === 0) {
-							const empty = document.createElement("span");
-							empty.className = "rsy-note";
-							empty.textContent = t("browse.empty");
-							browseList.append(empty);
-							return;
-						}
-						for (const entry of r.entries) {
-							if (entry.type === "directory") {
-								const rowEl = document.createElement("div");
-								rowEl.className = "rsy-fileRow";
-								const icon = document.createElement("span");
-								icon.className = "rsy-fileIcon";
-								icon.textContent = "▸";
-								const name = document.createElement("span");
-								name.className = "rsy-fileName";
-								name.textContent = `${entry.name}/`;
-								const mirrorPathFor = joinMirror(deviceId, path, entry.name);
-								if (mirrorPathFor !== "") {
-									const wsB = btn("⌂", (event) => {
-										event.stopPropagation();
-										post("workspace", { path: mirrorPathFor })
-											.then((res2) => { if (res2.ok !== true) throw new Error(res2.error); setStatus("ok", t("status.workspace")); })
-											.catch((cause) => setStatus("error", `${t("error.generic")}: ${cause.message}`));
-									});
-									wsB.title = t("browse.workspace");
-									rowEl.append(icon, name, wsB);
-								} else {
-									rowEl.append(icon, name);
-								}
-								rowEl.addEventListener("click", () => loadBrowse(deviceId, `${path === "/" ? "" : path}/${entry.name}`));
-								browseList.append(rowEl);
-							}
-						}
-						for (const entry of r.entries) {
-							if (entry.type !== "file") continue;
-							const rowEl = document.createElement("div");
-							rowEl.className = "rsy-fileRow";
-							rowEl.style.cursor = "default";
-							const icon = document.createElement("span");
-							icon.className = "rsy-fileIcon";
-							icon.textContent = "·";
-							const name = document.createElement("span");
-							name.className = "rsy-fileName";
-							name.textContent = entry.name;
-							rowEl.append(icon, name);
-							browseList.append(rowEl);
-						}
-					})
-					.catch((cause) => setStatus("error", `${t("error.generic")}: ${cause.message}`));
-			};
-
 			const joinMirror = (deviceId, remoteDir, name) => {
 				const under = (s) => {
 					if (s.deviceId !== deviceId) return false;
@@ -513,22 +372,324 @@ window.__ModuleLoader__.load({
 				return `${match.localPath}/${rel}`;
 			};
 
-			const refresh = () => {
-				getState().then((s) => {
-					if (s.ok !== true) throw new Error(s.error);
-					state = s;
-					renderState();
-				}).catch(() => setStatus("error", t("error.generic")));
+			const identity = state?.identity;
+			const peers = state?.peers ?? [];
+			const syncs = state?.syncs ?? [];
+			const idText = identity === undefined ? "" : `${identity.name} · ${identity.deviceId}`;
+			const peerMeta = (peer) => {
+				const roots = syncs.filter((s) => s.deviceId === peer.deviceId).map((s) => s.remotePath);
+				return `${peer.deviceId} · ${t(peerStatusKey(peer.status))}${roots.length > 0 ? ` · ${t("peers.roots")}: ${roots.join(", ")}` : ""}`;
 			};
-			refresh();
-			const timer = window.setInterval(refresh, 5000);
 
-			handleClose = () => { window.clearInterval(timer); onClose(); };
-			// teardown() (sidebar click / plugin dispose) removes the DOM without
-			// firing click handlers — give it a way to stop the poller too.
-			scrim.dispose = () => { window.clearInterval(timer); };
+			const browseList = browse === null
+				? (0, react_jsx_runtime.jsx)("p", { className: "rsy-note", children: t("browse.hint") })
+				: browse.entries === null
+					? (0, react_jsx_runtime.jsxs)("span", {
+						className: "rsy-dotText",
+						children: [
+							(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.StateDot, { state: "ongoing" }),
+							(0, react_jsx_runtime.jsx)("span", { className: "rsy-note", children: t("browse.loading") }),
+						],
+					})
+					: browse.entries.length === 0
+						? (0, react_jsx_runtime.jsx)("p", { className: "rsy-note", children: t("browse.empty") })
+						: [
+							...browse.entries.filter((entry) => entry.type === "directory").map((entry) => {
+								const mirrorPathFor = joinMirror(browse.deviceId, browse.path, entry.name);
+								return (0, react_jsx_runtime.jsxs)("div", {
+									className: "rsy-itemRow rsy-itemRowCanClick",
+									onClick: () => loadBrowse(browse.deviceId, `${browse.path === "/" ? "" : browse.path}/${entry.name}`),
+									children: [
+										(0, react_jsx_runtime.jsx)("span", {
+											className: "rsy-itemIcon",
+											children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.FileTypeIcon, { kind: "folder", size: 16 }),
+										}),
+										(0, react_jsx_runtime.jsx)("span", { className: "rsy-itemName", children: entry.name }),
+										mirrorPathFor !== "" ? (0, react_jsx_runtime.jsx)(IconAction, {
+											label: t("browse.workspace"),
+											icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPlusOutlineRegular, { size: 14 }),
+											onClick: (event) => { event.stopPropagation(); registerWorkspace(mirrorPathFor); },
+										}) : null,
+									],
+								}, entry.name);
+							}),
+							...browse.entries.filter((entry) => entry.type === "file").map((entry) => (0, react_jsx_runtime.jsxs)("div", {
+								className: "rsy-itemRow",
+								children: [
+									(0, react_jsx_runtime.jsx)("span", {
+										className: "rsy-itemIcon",
+										children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.FileTypeIcon, { path: entry.name, size: 16 }),
+									}),
+									(0, react_jsx_runtime.jsx)("span", { className: "rsy-itemName", children: entry.name }),
+								],
+							}, entry.name)),
+						];
 
-			return scrim;
+			return (0, react_jsx_runtime.jsxs)("div", {
+				className: "rsy-main",
+				children: [
+					(0, react_jsx_runtime.jsxs)("div", {
+						className: "rsy-page",
+						children: [
+							// Native pageHead: title 20/500/28 + intro 13/20 secondary.
+							(0, react_jsx_runtime.jsx)("header", {
+								className: "rsy-head",
+								children: (0, react_jsx_runtime.jsxs)("div", {
+									children: [
+										(0, react_jsx_runtime.jsx)("h1", { className: "rsy-title", children: t("panel.title") }),
+										(0, react_jsx_runtime.jsx)("p", { className: "rsy-intro", children: t("panel.intro") }),
+									],
+								}),
+							}),
+							// ── This device ──
+							(0, react_jsx_runtime.jsxs)("section", {
+								className: "rsy-group",
+								children: [
+									(0, react_jsx_runtime.jsx)(GroupHead, { titleKey: "this.title" }),
+									(0, react_jsx_runtime.jsxs)(KVRow, {
+										labelKey: "this.id",
+										children: [
+											(0, react_jsx_runtime.jsx)("span", { className: "rsy-mono", children: idText }),
+											(0, react_jsx_runtime.jsx)(IconAction, {
+												label: t("this.copy"),
+												icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCopyOutlineRegular, { size: 14 }),
+												onClick: () => { if (idText !== "") copyText(idText); },
+											}),
+										],
+									}),
+									(0, react_jsx_runtime.jsxs)(KVRow, {
+										labelKey: "this.code",
+										children: [
+											(0, react_jsx_runtime.jsx)("span", { className: "rsy-mono", children: identity?.pairingCode ?? "" }),
+											(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+												variant: "ghost",
+												size: "sm",
+												icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconRefreshOutlineRegular, {}),
+												onClick: refreshCode,
+												children: t("this.refresh"),
+											}),
+										],
+									}),
+									(0, react_jsx_runtime.jsxs)(KVRow, {
+										labelKey: "this.hub",
+										children: [
+											(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Input, {
+												className: "rsy-input",
+												spellCheck: false,
+												placeholder: "wss://host.example/api/rich-sync/ws",
+												value: hubDraft,
+												onChange: (event) => setHubDraft(event.target.value),
+												onFocus: () => { hubFocused.current = true; },
+												onBlur: () => { hubFocused.current = false; },
+											}),
+											(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+												variant: "ghost",
+												size: "sm",
+												icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCheckOutlineRegular, {}),
+												onClick: saveHub,
+												children: t("this.hubSave"),
+											}),
+											(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+												variant: "ghost",
+												size: "sm",
+												icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconLinkOutlineRegular, {}),
+												onClick: connectHub,
+												children: t("this.connect"),
+											}),
+										],
+									}),
+									(0, react_jsx_runtime.jsx)("p", { className: "rsy-note", children: t("this.hubHint") }),
+								],
+							}),
+							// ── Linked devices ──
+							(0, react_jsx_runtime.jsxs)("section", {
+								className: "rsy-group",
+								children: [
+									(0, react_jsx_runtime.jsx)(GroupHead, { titleKey: "peers.title", count: peers.length }),
+									(0, react_jsx_runtime.jsx)("div", {
+										className: "rsy-list",
+										children: peers.length === 0
+											? (0, react_jsx_runtime.jsx)("p", { className: "rsy-note", children: t("peers.empty") })
+											: peers.map((peer) => (0, react_jsx_runtime.jsxs)("div", {
+												className: "rsy-itemRow",
+												children: [
+													(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.StateDot, { state: peerDotState(peer.status) }),
+													(0, react_jsx_runtime.jsxs)("div", {
+														className: "rsy-itemMain",
+														children: [
+															(0, react_jsx_runtime.jsx)("span", { className: "rsy-itemName", children: peer.name }),
+															(0, react_jsx_runtime.jsx)("span", { className: "rsy-itemMeta", children: peerMeta(peer) }),
+														],
+													}),
+													(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+														variant: "ghost",
+														size: "sm",
+														icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconBrowseOutlineRegular, {}),
+														onClick: () => loadBrowse(peer.deviceId, "/"),
+														children: t("browse.title"),
+													}),
+													(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+														variant: "ghost",
+														size: "sm",
+														icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCloseOutlineRegular, {}),
+														onClick: () => setUnlinkTarget(peer),
+														children: t("peers.unlink"),
+													}),
+												],
+											}, peer.deviceId)),
+									}),
+									(0, react_jsx_runtime.jsxs)("div", {
+										className: "rsy-row",
+										children: [
+											(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Input, {
+												className: "rsy-input",
+												spellCheck: false,
+												placeholder: t("peers.hub"),
+												value: add.hub,
+												onChange: (event) => setAdd((prev) => ({ ...prev, hub: event.target.value })),
+											}),
+											(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Input, {
+												className: "rsy-input",
+												spellCheck: false,
+												placeholder: t("peers.id"),
+												value: add.id,
+												onChange: (event) => setAdd((prev) => ({ ...prev, id: event.target.value })),
+											}),
+											(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Input, {
+												className: "rsy-input",
+												spellCheck: false,
+												placeholder: t("peers.code"),
+												value: add.code,
+												onChange: (event) => setAdd((prev) => ({ ...prev, code: event.target.value })),
+											}),
+											// The page's single main action: pairing a device.
+											(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+												variant: "primary",
+												size: "sm",
+												icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPlusOutlineRegular, {}),
+												onClick: linkPeer,
+												children: t("peers.link"),
+											}),
+										],
+									}),
+								],
+							}),
+							// ── Browse ──
+							(0, react_jsx_runtime.jsxs)("section", {
+								className: "rsy-group",
+								children: [
+									(0, react_jsx_runtime.jsx)(GroupHead, { titleKey: "browse.title" }),
+									(0, react_jsx_runtime.jsxs)("div", {
+										className: "rsy-browseBar",
+										children: [
+											(0, react_jsx_runtime.jsx)(IconAction, {
+												label: t("browse.up"),
+												icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronUpOutlineRegular, { size: 14 }),
+												disabled: browse === null || browse.path === "/",
+												onClick: () => { if (browse !== null && browse.path !== "/") loadBrowse(browse.deviceId, dirnameOf(browse.path)); },
+											}),
+											browse === null ? null : (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, {
+												children: [
+													(0, react_jsx_runtime.jsx)("span", { className: "rsy-browseId", children: browse.deviceId }),
+													(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.PathLabel, { path: browse.path }),
+												],
+											}),
+											(0, react_jsx_runtime.jsx)(IconAction, {
+												label: t("browse.refresh"),
+												icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconRefreshOutlineRegular, { size: 14 }),
+												disabled: browse === null,
+												onClick: () => { if (browse !== null) loadBrowse(browse.deviceId, browse.path); },
+											}),
+											(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+												variant: "ghost",
+												size: "sm",
+												icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPlusOutlineRegular, {}),
+												disabled: browse === null,
+												onClick: syncFolder,
+												children: t("browse.sync"),
+											}),
+										],
+									}),
+									(0, react_jsx_runtime.jsx)("div", { className: "rsy-list", children: browseList }),
+								],
+							}),
+							// ── Mirrors ──
+							(0, react_jsx_runtime.jsxs)("section", {
+								className: "rsy-group",
+								children: [
+									(0, react_jsx_runtime.jsx)(GroupHead, { titleKey: "mirrors.title", count: syncs.length }),
+									(0, react_jsx_runtime.jsx)("div", {
+										className: "rsy-list",
+										children: syncs.length === 0
+											? (0, react_jsx_runtime.jsx)("p", { className: "rsy-note", children: t("mirrors.empty") })
+											: syncs.map((sync) => (0, react_jsx_runtime.jsxs)("div", {
+												className: "rsy-itemRow",
+												children: [
+													(0, react_jsx_runtime.jsx)("span", {
+														title: t(mirrorDotTitleKey(sync)),
+														children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.StateDot, { state: mirrorDotState(sync) }),
+													}),
+													(0, react_jsx_runtime.jsxs)("div", {
+														className: "rsy-itemMain",
+														children: [
+															(0, react_jsx_runtime.jsxs)("span", {
+																className: "rsy-itemNameLine",
+																children: [
+																	(0, react_jsx_runtime.jsx)("span", { className: "rsy-itemId", children: sync.deviceId }),
+																	(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.PathLabel, { path: sync.remotePath }),
+																],
+															}),
+															(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.PathLabel, { path: sync.localPath, className: "rsy-itemPath" }),
+														],
+													}),
+													(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+														variant: "ghost",
+														size: "sm",
+														icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCopyOutlineRegular, {}),
+														onClick: () => openMirror(sync),
+														children: t("mirrors.open"),
+													}),
+												],
+											}, `${sync.deviceId}:${sync.remotePath}`)),
+									}),
+								],
+							}),
+							(0, react_jsx_runtime.jsx)("footer", {
+								className: "rsy-footer",
+								children: (0, react_jsx_runtime.jsx)("span", {
+									className: status.kind === "error" ? "rsy-status rsy-statusErr" : status.kind === "ok" ? "rsy-status rsy-statusOk" : "rsy-status",
+									children: status.text,
+								}),
+							}),
+						],
+					}),
+					// Unlink confirm: the native dialog (mask, focus trap, Esc).
+					(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Modal, {
+						open: unlinkTarget !== null,
+						onClose: () => setUnlinkTarget(null),
+						title: t("peers.unlinkTitle"),
+						closeLabel: t("action.close"),
+						description: unlinkTarget === null ? "" : `${unlinkTarget.name} (${unlinkTarget.deviceId})`,
+						children: (0, react_jsx_runtime.jsx)("p", { children: t("peers.unlinkBody") }),
+						footer: (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, {
+							children: [
+								(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+									variant: "outline",
+									size: "sm",
+									onClick: () => setUnlinkTarget(null),
+									children: t("action.cancel"),
+								}),
+								(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+									variant: "primary",
+									size: "sm",
+									onClick: confirmUnlink,
+									children: t("peers.unlinkConfirm"),
+								}),
+							],
+						}),
+					}),
+				],
+			});
 		}
 		//#endregion
 		//#region lib/index.js
@@ -538,7 +699,7 @@ window.__ModuleLoader__.load({
 
 			// Sidebar + panel ride the sanctioned slots (see lib/panel-slot.js):
 			// the shell owns the row chrome and panel selection; the panel's
-			// poller stops through the React 19 ref cleanup on unmount.
+			// 5s poller stops through the effect cleanup on unmount.
 			ctx.slots.inject("main", () => ctx.slots.register({
 				name: "main",
 				key: PANEL_ID,
