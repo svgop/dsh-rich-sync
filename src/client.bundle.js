@@ -10,6 +10,7 @@ window.__ModuleLoader__.load({
 			"entry.label": "Devices",
 			"entry.tooltip": "Link devices, stream their folders, work remotely as if local",
 			"panel.title": "Devices",
+			"panel.intro": "Link another machine over a websocket relay and mirror one of its folders locally as a real directory and native workspace, with two-way streaming.",
 			"this.title": "This device",
 			"this.id": "Device ID",
 			"this.code": "Pairing code",
@@ -52,6 +53,7 @@ window.__ModuleLoader__.load({
 			"entry.label": "设备",
 			"entry.tooltip": "链接设备，流式同步其文件夹，像本地一样远程工作",
 			"panel.title": "设备",
+			"panel.intro": "通过 websocket 中继链接另一台机器，把它的某个文件夹镜像为本地真实目录与原生工作区，变更双向流式同步。",
 			"this.title": "本机",
 			"this.id": "设备 ID",
 			"this.code": "配对码",
@@ -100,11 +102,13 @@ window.__ModuleLoader__.load({
 .rsy-entry[data-active="true"]{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .rsy-entryIcon{display:inline-flex;justify-content:center;align-items:center;width:24px;height:24px;flex:none;color:var(--dsw-alias-label-tertiary)}
 .rsy-entryLabel{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.rsy-scrim{position:fixed;inset:0;z-index:90;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;padding:24px}
-.rsy-card{width:100%;max-width:760px;max-height:min(90vh,1100px);border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-specific-tip);border-radius:12px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 8px 24px rgba(0,0,0,.3)}
+.rsy-scrim{position:fixed;inset:0;z-index:90;background:var(--dsw-alias-bg-mask-1);backdrop-filter:var(--dsw-mask-blur);display:flex;align-items:center;justify-content:center;padding:24px}
+.rsy-card{width:100%;max-width:760px;max-height:min(90vh,1100px);border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);border-radius:var(--dsw-radius-panel);display:flex;flex-direction:column;overflow:hidden;box-shadow:var(--dsw-elevation-prominent)}
 .rsy-card,.rsy-card *{box-sizing:border-box}
 .rsy-head{display:flex;align-items:center;gap:10px;padding:14px 16px 10px}
 .rsy-title{font-size:14px;font-weight:500;line-height:20px;color:var(--dsw-alias-label-primary);flex:none}
+.rsy-headText{min-width:0;display:flex;flex-direction:column;align-items:flex-start}
+.rsy-intro{display:none}
 .rsy-closeBtn{flex:none;margin-left:auto;width:28px;height:28px;display:grid;place-items:center;color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;border-radius:999px;font-size:16px}
 .rsy-closeBtn:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .rsy-body{flex:1;min-height:0;display:flex;flex-direction:column;overflow-y:auto;scrollbar-width:none}
@@ -115,12 +119,12 @@ window.__ModuleLoader__.load({
 .rsy-label{flex:none;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px;width:88px}
 .rsy-mono{min-width:0;flex:1;color:var(--dsw-alias-label-primary);font-size:12px;line-height:16px;font-family:ui-monospace,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .rsy-btn{appearance:none;background:0 0;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;padding:3px 10px;font:inherit;font-size:12px;line-height:16px;color:var(--dsw-alias-label-secondary);cursor:pointer;flex:none}
-.rsy-btn:hover{border-color:var(--dsw-alias-state-business-primary);color:var(--dsh-alias-state-business-primary,var(--dsw-alias-state-business-primary))}
+.rsy-btn:hover{border-color:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-state-business-primary)}
 .rsy-input{min-width:0;flex:1;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-base);border-radius:8px;color:var(--dsw-alias-label-primary);font:inherit;font-size:12.5px;padding:4px 8px;outline:none;font-family:ui-monospace,monospace}
 .rsy-input:focus{border-color:var(--dsw-alias-state-business-primary)}
 .rsy-note{color:var(--dsw-alias-label-caption);font-size:11px;line-height:14px}
 .rsy-dot{width:7px;height:7px;border-radius:999px;flex:none;background:var(--dsw-alias-label-caption)}
-.rsy-dotOn{background:var(--dsw-alias-state-success-primary,#3fb950)}
+.rsy-dotOn{background:var(--dsw-alias-state-success-primary)}
 .rsy-peerRow{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--dsw-alias-border-l1)}
 .rsy-peerRow:last-child{border-bottom:none}
 .rsy-peerMain{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
@@ -135,10 +139,20 @@ window.__ModuleLoader__.load({
 .rsy-status{flex:1;align-self:center;min-width:0;padding:0 12px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .rsy-statusErr{color:var(--dsw-alias-state-error-primary)}
 .rsy-statusOk{color:var(--dsw-alias-state-success-primary)}
-/* Hosted main-panel mode (sidebar.panellist + main slots). */
-.rsy-main{height:100%;overflow:auto;box-sizing:border-box;background:var(--dsw-specific-sidebar-fill);padding:24px;display:flex;justify-content:center;align-items:flex-start}
-.rsy-main .rsy-scrim{position:static;z-index:auto;background:0 0;padding:0;display:flex;flex-direction:column;width:100%;max-width:860px;height:100%}
-.rsy-main .rsy-card{flex:1;min-height:0;max-height:none;box-shadow:none}
+/* Hosted main-panel mode (sidebar.panellist + main slots) — native page template:
+   transparent page (main column paints --dsw-alias-bg-base), 960px column,
+   pageHead anatomy, sections directly on the page, no dialog-card chrome. */
+.rsy-main{height:100%;overflow:auto;box-sizing:border-box;padding:0 clamp(24px,4vw,48px) 48px;display:flex;justify-content:center;align-items:flex-start}
+.rsy-main .rsy-scrim{position:static;z-index:auto;background:0 0;backdrop-filter:none;padding:0;display:flex;flex-direction:column;width:100%;max-width:960px}
+.rsy-main .rsy-card{flex:1;min-height:0;max-height:none;background:0 0;border:none;border-radius:0;box-shadow:none;overflow:visible}
+.rsy-main .rsy-head{justify-content:space-between;align-items:flex-start;gap:16px;padding:28px 0 0}
+[data-platform=darwin] .rsy-main .rsy-head{padding-top:calc(28px + var(--dsh-frame-top-clearance,0px))}
+.rsy-main .rsy-title{font-size:20px;line-height:28px}
+.rsy-main .rsy-intro{display:flex;color:var(--dsw-alias-label-secondary);margin:4px 0 0;font-size:13px;line-height:20px}
+.rsy-main .rsy-body{overflow:visible;gap:32px;padding:32px 0 0}
+.rsy-main .rsy-section{padding:10px 0}
+.rsy-main .rsy-footer{margin-top:32px}
+.rsy-main .rsy-status{padding:0}
 .rsy-main .rsy-closeBtn{display:none}`;
 		const tagId = "dsh-rich-sync/panel.css";
 		if (typeof document !== "undefined" && document.querySelector(`style[data-plugin-css="${tagId}"]`) === null) {
@@ -207,16 +221,24 @@ window.__ModuleLoader__.load({
 			card.setAttribute("aria-label", t("panel.title"));
 			const head = document.createElement("div");
 			head.className = "rsy-head";
+			// Native pageHead anatomy: text block (title + intro) left, actions right.
+			// The intro renders hosted-mode only; overlay dialogs keep the compact head.
+			const headText = document.createElement("div");
+			headText.className = "rsy-headText";
 			const title = document.createElement("span");
 			title.className = "rsy-title";
 			title.textContent = t("panel.title");
+			const intro = document.createElement("span");
+			intro.className = "rsy-intro";
+			intro.textContent = t("panel.intro");
+			headText.append(title, intro);
 			const closeBtn = document.createElement("button");
 			closeBtn.type = "button";
 			closeBtn.className = "rsy-closeBtn";
 			closeBtn.setAttribute("aria-label", t("action.close"));
 			closeBtn.textContent = "×";
 			closeBtn.addEventListener("click", () => handleClose());
-			head.append(title, closeBtn);
+			head.append(headText, closeBtn);
 			card.append(head);
 
 			const body = document.createElement("div");
